@@ -1,6 +1,7 @@
 package ogc.rs.restAssuredTest;
 
 import io.restassured.response.Response;
+import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import jdk.jfr.Description;
 import ogc.rs.util.FakeTokenBuilder;
@@ -11,22 +12,29 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import java.util.UUID;
 import java.time.Instant;
 import static io.restassured.RestAssured.given;
-import static ogc.rs.apiserver.util.Constants.API_CALLS_LIMIT_EXCEEDED;
-import static ogc.rs.apiserver.util.Constants.DATA_USAGE_LIMIT_EXCEEDED;
+import static ogc.rs.apiserver.util.Constants.*;
 import static ogc.rs.common.Constants.CODE_KEY;
 import static ogc.rs.common.Constants.DESCRIPTION_KEY;
 import static org.hamcrest.Matchers.*;
 
 @ExtendWith(RestAssuredConfigExtension.class)
-public class UsageLimitEnforcementHandlerIT {
+public class TokenLimitsEnforcementHandlerIT {
 
-    private static final Logger LOGGER = LogManager.getLogger(UsageLimitEnforcementHandlerIT.class);
+    private static final Logger LOGGER = LogManager.getLogger(TokenLimitsEnforcementHandlerIT.class);
     String privateVectorDataEndpoint = "/collections/{collectionId}/items";
     String collectionId = "a5a6e26f-d252-446d-b7dd-4d50ea945102";
     Instant sixMonthsAgo = Instant.now().minusSeconds(6 * 30L * 24L * 60L * 60L); // 6 months ago
 
     private Response sendRequest(String collectionId, String token) {
         return given().pathParam("collectionId", collectionId)
+                .auth().oauth2(token)
+                .contentType("application/json")
+                .when().get(privateVectorDataEndpoint);
+    }
+
+    private Response sendBBoxRequest(String collectionId, String token, String bbox) {
+        return given().pathParam("collectionId", collectionId)
+                .queryParam("bbox", bbox)
                 .auth().oauth2(token)
                 .contentType("application/json")
                 .when().get(privateVectorDataEndpoint);
@@ -156,5 +164,62 @@ public class UsageLimitEnforcementHandlerIT {
                 .build();
         Response response = sendRequest(collectionId, token);
         response.then().statusCode(400).body(CODE_KEY, is("Bad Request"));
+    }
+    @Test
+    @Description("Testing full intersection of query bbox with token bbox")
+    public void testFullIntersectionOfQueryBboxWithTokenBbox() {
+        LOGGER.info("Testing full intersection of query bbox with token bbox");
+        String bbox = "-4.5,51.5,-2.5,52.5";
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("bbox", new JsonArray()
+                                .add(-5.0)
+                                .add(51.0)
+                                .add(-2.0)
+                                .add(53.0))))
+                .build();
+        Response response = sendBBoxRequest(collectionId, token, bbox);
+        response.then().statusCode(200);
+    }
+    @Test
+    @Description("Testing partial intersection of query bbox with token bbox")
+    public void testPartialIntersectionOfQueryBboxWithTokenBbox() {
+        LOGGER.info("Testing partial intersection of query bbox with token bbox");
+        String bbox = "-6.0,52.0,-3.0,54.0";
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("bbox", new JsonArray()
+                                .add(-5.0)
+                                .add(51.0)
+                                .add(-2.0)
+                                .add(53.0))))
+                .build();
+        Response response = sendBBoxRequest(collectionId, token, bbox);
+        response.then().statusCode(200);
+    }
+    @Test
+    @Description("Testing no intersection of query bbox with token bbox")
+    public void testNoIntersectionOfQueryBboxWithTokenBbox() {
+        LOGGER.info("Testing no intersection of query bbox with token bbox");
+        String bbox = "0.0,55.0,1.0,57.0";
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("bbox", new JsonArray()
+                                .add(-5.0)
+                                .add(51.0)
+                                .add(-2.0)
+                                .add(53.0))))
+                .build();
+        Response response = sendBBoxRequest(collectionId, token, bbox);
+        response.then().statusCode(403).body(DESCRIPTION_KEY, is(BBOX_VIOLATES_CONSTRAINTS));
     }
 }

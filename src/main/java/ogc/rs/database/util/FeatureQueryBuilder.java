@@ -77,10 +77,9 @@ public class FeatureQueryBuilder {
     if (bboxCrsSrid.equalsIgnoreCase(storageCrs))
       this.bbox = "st_intersects(geom, st_makeenvelope(" + coordinates + "))";
     else
-      this.bbox = "st_intersects(geom, st_transform(st_makeenvelope(" + coordinates + "),"+ storageCrs +"))";;
+      this.bbox = "st_intersects(geom, st_transform(st_makeenvelope(" + coordinates + "),"+ storageCrs +"))";
 
     this.additionalParams = "where";
-
   }
   public void setCrs (String crs) {
     // st_asgeojson(geometry, maxdecimaldigits, options); options = 0 means no extra options
@@ -201,6 +200,7 @@ public class FeatureQueryBuilder {
   }
 
   public String buildSqlString(String isCountQuery) {
+
     this.sqlString = String.format("select count(id) from \"%1$s\" "
         , this.tableName);
 

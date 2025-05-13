@@ -1,26 +1,32 @@
 package ogc.rs.apiserver.util;
 
+import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
- * Represents API usage and data usage limits extracted from a user's token.
+ * Represents API usage, data usage, and spatial (bbox) limits extracted from a user's token.
  */
 public class Limits {
 
     private final Long policyIssuedAt;
     private final Long dataUsageLimitInBytes;
     private final Long apiHitsLimit;
+    private final List<Double> bboxLimit;
 
-    private Limits(Long policyIssuedAt, Long dataUsageLimitInBytes, Long apiHitsLimit) {
+    private Limits(Long policyIssuedAt, Long dataUsageLimitInBytes, Long apiHitsLimit, List<Double> bboxLimit) {
         this.policyIssuedAt = policyIssuedAt;
         this.dataUsageLimitInBytes = dataUsageLimitInBytes;
         this.apiHitsLimit = apiHitsLimit;
+        this.bboxLimit = bboxLimit;
     }
 
     /**
      * Parses the JsonObject representing limits and constructs a Limits instance.
      *
-     * @param limitsJson JsonObject with fields like "iat", "dataUsage", "apiHits"
+     * @param limitsJson JsonObject with fields like "iat", "dataUsage", "apiHits", "bbox"
      * @return Limits object, or null if limitsJson is null
      */
     public static Limits fromJson(JsonObject limitsJson) {
@@ -41,7 +47,12 @@ public class Limits {
             apiHits = limitsJson.getLong("apiHits");
         }
 
-        return new Limits(iat, dataUsageBytes, apiHits);
+        List<Double> bbox = null;
+        if (limitsJson.containsKey("bbox")) {
+            bbox = parseBboxLimit(limitsJson.getJsonArray("bbox"));
+        }
+
+        return new Limits(iat, dataUsageBytes, apiHits, bbox);
     }
 
     /**
@@ -78,6 +89,33 @@ public class Limits {
         }
     }
 
+    /**
+     * Parses a JSON array representing bbox into a List<Double>.
+     *
+     * @param bboxArray JsonArray containing 4 or 6 numeric values
+     * @return List<Double> representation of bbox
+     * @throws OgcException if format is invalid
+     */
+    private static List<Double> parseBboxLimit(JsonArray bboxArray) {
+        if (bboxArray == null || bboxArray.isEmpty()) {
+            return null;
+        }
+
+        if (bboxArray.size() != 4 && bboxArray.size() != 6) {
+            throw new OgcException(400, "Bad Request", "Invalid bbox format: must have 4 or 6 elements");
+        }
+
+        List<Double> bbox = new ArrayList<>();
+        for (int i = 0; i < bboxArray.size(); i++) {
+            try {
+                bbox.add(bboxArray.getDouble(i));
+            } catch (ClassCastException e) {
+                throw new OgcException(400, "Bad Request", "bbox must contain only numeric values");
+            }
+        }
+        return bbox;
+    }
+
     public Long getPolicyIssuedAt() {
         return policyIssuedAt;
     }
@@ -88,5 +126,9 @@ public class Limits {
 
     public Long getApiHitsLimit() {
         return apiHitsLimit;
+    }
+
+    public List<Double> getBboxLimit() {
+        return bboxLimit;
     }
 }

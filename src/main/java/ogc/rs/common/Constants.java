@@ -17,7 +17,7 @@ public class Constants {
     public static final String DEFAULT_SERVER_CRS = "http://www.opengis.net/def/crs/OGC/1.3/CRS84";
     public static final Integer DEFAULT_CRS_SRID = 4326;
     public static final Set<String> WELL_KNOWN_QUERY_PARAMETERS =
-        Set.of("limit", "bbox", "datetime", "offset", "bbox-crs", "crs");
+        Set.of("limit", "bbox", "datetime", "offset", "bbox-crs", "crs", "tokenBbox");
     public static final String UUID_REGEX = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
 
     public static final String OAS_BEARER_SECURITY_SCHEME = "DX-AAA-Token";

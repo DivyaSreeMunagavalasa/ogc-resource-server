@@ -16,6 +16,7 @@ import io.vertx.ext.web.validation.ValidationHandler;
 import ogc.rs.apiserver.handlers.DxTokenAuthenticationHandler;
 import ogc.rs.apiserver.util.AuthInfo;
 import ogc.rs.apiserver.util.AuthInfo.RoleEnum;
+import ogc.rs.apiserver.util.Limits;
 import ogc.rs.apiserver.util.OgcException;
 import ogc.rs.apiserver.util.StacItemSearchParams;
 import ogc.rs.catalogue.CatalogueService;
@@ -358,11 +359,27 @@ public class ApiServerVerticle extends AbstractVerticle {
 
     RequestParameters requestParameters = routingContext.get(ValidationHandler.REQUEST_CONTEXT_KEY);
     String collectionId = routingContext.request().path().split("/")[2];
+    AuthInfo user = routingContext.get(USER_KEY);
+
+// Extract query parameters as a mutable map
     Map<String, Object> queryParams = requestParameters.toJson().getJsonObject("query").getMap();
     Map<String, String> queryParamsMap = queryParams.entrySet()
-        .stream()
-        .filter(i -> i.getValue() != null)
-        .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().toString()));
+            .stream()
+            .filter(i -> i.getValue() != null)
+            .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().toString()));
+
+// Extract bbox limit from user's token constraints
+    JsonObject limitsJson = user.getConstraints().getJsonObject("limits");
+    Limits limits = Limits.fromJson(limitsJson);
+    if (limits != null && limits.getBboxLimit() != null) {
+      List<Double> tokenBboxList = limits.getBboxLimit();
+      String tokenBbox = "[" + tokenBboxList.stream()
+              .map(String::valueOf)
+              .collect(Collectors.joining(",")) + "]";
+      queryParamsMap.put("tokenBbox", tokenBbox);
+      LOGGER.debug("<APIServer> Token BBOX injected: {}", tokenBboxList);
+    }
+
     LOGGER.debug("<APIServer> QP- {}", queryParamsMap);
 
     Future<Map<String, Integer>> isCrsValid = dbService.isCrsValid(collectionId, queryParamsMap);
