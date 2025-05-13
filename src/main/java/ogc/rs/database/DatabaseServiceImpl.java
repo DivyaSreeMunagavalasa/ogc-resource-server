@@ -1,5 +1,6 @@
 package ogc.rs.database;
 
+import static ogc.rs.apiserver.util.Constants.BBOX_VIOLATES_CONSTRAINTS;
 import static ogc.rs.database.util.Constants.PROCESSES_TABLE_NAME;
 import io.vertx.core.CompositeFuture;
 import io.vertx.core.Future;
@@ -9,6 +10,7 @@ import io.vertx.core.json.JsonObject;
 import io.vertx.pgclient.PgPool;
 import io.vertx.sqlclient.*;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collector;
 import java.util.stream.Collectors;
 import ogc.rs.apiserver.router.RouterManager;
@@ -106,94 +108,138 @@ public class DatabaseServiceImpl implements DatabaseService{
     @Override
     public Future<JsonObject> getFeatures(String collectionId, Map<String, String> queryParams,
                                           Map<String, Integer> crs) {
-      LOGGER.info("getFeatures");
-      Promise<JsonObject> result = Promise.promise();
-      Collector<Row, ? , Map<String, Integer>> collectorT = Collectors.toMap(row -> row.getColumnName(0),
-          row -> row.getInteger("count"));
-      Collector<Row, ? , List<JsonObject>> collector = Collectors.mapping(Row::toJson, Collectors.toList());
-      String datetimeValue;
-      FeatureQueryBuilder featureQuery = new FeatureQueryBuilder(collectionId);
+        LOGGER.info("getFeatures");
+        Promise<JsonObject> result = Promise.promise();
 
-      Future<String> sridOfStorageCrs = getSridOfStorageCrs(collectionId);
-      featureQuery.setLimit(Integer.parseInt(queryParams.get("limit")));
-      featureQuery.setBboxCrsSrid(String.valueOf(crs.get(queryParams.get("bbox-crs"))));
-      if (queryParams.get("bbox") != null) {
-        // find storageCrs from collections_details; remove square brackets since bbox is a string repr. of array
-        String coordinates = queryParams.get("bbox").replace("[", "").replace("]", "");
-        sridOfStorageCrs
-            .onSuccess(srid -> featureQuery.setBbox(coordinates, srid))
-            .onFailure(fail -> result.fail(fail.getMessage()));
-        if (sridOfStorageCrs.failed())
-          return result.future();
-      }
-      //TODO: convert individual DB calls to a transaction
-      datetimeValue = queryParams.getOrDefault("datetime", null);
-      featureQuery.setOffset(Integer.parseInt(queryParams.get("offset")));
-      featureQuery.setCrs(String.valueOf(crs.get(queryParams.get("crs"))));
-      Set<String> keys =  queryParams.keySet();
-      keys.removeAll(WELL_KNOWN_QUERY_PARAMETERS);
-      String[] key = keys.toArray(new String[keys.size()]);
-      if (!keys.isEmpty())
-          featureQuery.setFilter(key[0], queryParams.get(key[0]));
+        Collector<Row, ? , Map<String, Integer>> collectorT = Collectors.toMap(row -> row.getColumnName(0),
+                row -> row.getInteger("count"));
+        Collector<Row, ? , List<JsonObject>> collector = Collectors.mapping(Row::toJson, Collectors.toList());
 
-      sridOfStorageCrs.compose(srid ->
-      client.withConnection(conn ->
-          //TODO: Remove datetime_key information when queryables api is implemented
-        conn.preparedQuery("select datetime_key from collections_details where id = $1::uuid")
-                .collecting(collector)
-                .execute(Tuple.of(UUID.fromString(collectionId)))
-                .onSuccess(conn1 -> {
-                  if (conn1.value().get(0).getString("datetime_key") != null && datetimeValue != null ){
-                    LOGGER.debug("datetimeKey: {}, datetimeValue: {}"
-                        ,conn1.value().get(0).getString("datetime_key"), datetimeValue);
-                    featureQuery.setDatetimeKey(conn1.value().get(0).getString("datetime_key"));
-                    featureQuery.setDatetime(datetimeValue);
-                  }
-                  LOGGER.debug("datetime_key: {}",conn1.value().get(0).getString("datetime_key"));
-                  LOGGER.debug("<DBService> Sql query- {} ",  featureQuery.buildSqlString());
-                  LOGGER.debug("Count Query- {}", featureQuery.buildSqlString("count"));
-                  JsonObject resultJson = new JsonObject();
-                  conn.preparedQuery(featureQuery.buildSqlString("count"))
-                      .collecting(collectorT).execute()
-                      .onSuccess(count -> {
-                        LOGGER.debug("Feature Count- {}",count.value().get("count"));
-                        int totalCount = count.value().get("count");
-                        resultJson.put("numberMatched", totalCount);
-                      })
-                      .onFailure(countFail -> {
-                        LOGGER.error("Failed to get the count of number of features!");
-                        result.fail("Error!");
-                      })
-                      .compose(sql -> {
-                        conn.preparedQuery(featureQuery.buildSqlString())
-                            .collecting(collector).execute().map(SqlResult::value)
-                            .onSuccess(success -> {
-                              if (!success.isEmpty())
-                                resultJson
-                                    .put("features", new JsonArray(success))
-                                    .put("numberReturned", success.size());
-                              else
-                                resultJson
-                                    .put("features", new JsonArray())
-                                    .put("numberReturned", 0);
-                              resultJson.put("type", "FeatureCollection");
-                              result.complete(resultJson);
+        String datetimeValue = queryParams.getOrDefault("datetime", null);
+
+        FeatureQueryBuilder featureQuery = new FeatureQueryBuilder(collectionId);
+
+        featureQuery.setLimit(Integer.parseInt(queryParams.get("limit")));
+        featureQuery.setOffset(Integer.parseInt(queryParams.get("offset")));
+        featureQuery.setCrs(String.valueOf(crs.get(queryParams.get("crs"))));
+        featureQuery.setBboxCrsSrid(String.valueOf(crs.get(queryParams.get("bbox-crs"))));
+
+        // Filter logic
+        Map<String, String> filteredParams = new HashMap<>(queryParams);
+        filteredParams.keySet().removeAll(WELL_KNOWN_QUERY_PARAMETERS);
+        if (!filteredParams.isEmpty()) {
+            String[] key = filteredParams.keySet().toArray(new String[filteredParams.size()]);
+            featureQuery.setFilter(key[0], filteredParams.get(key[0]));
+        }
+
+        Future<String> sridOfStorageCrs = getSridOfStorageCrs(collectionId);
+
+        // Compose bbox handling
+        Future<Void> bboxFuture = sridOfStorageCrs.compose(srid -> {
+            if (queryParams.get("bbox") != null || queryParams.get("tokenBbox") != null) {
+                LOGGER.debug("Entered into bbox check");
+                String queryBbox = queryParams.get("bbox");
+                String tokenBbox = queryParams.get("tokenBbox");
+                LOGGER.debug("The query param bbox is : {}", queryBbox);
+                LOGGER.debug("The token bbox is : {}", tokenBbox);
+
+                if (queryBbox != null) {
+                    queryBbox = queryBbox.replace("[", "").replace("]", "");
+                }
+                if (tokenBbox != null) {
+                    tokenBbox = tokenBbox.replace("[", "").replace("]", "");
+                }
+
+                String finalQueryBbox = queryBbox;
+                String finalTokenBbox = tokenBbox;
+                int sridInt = Integer.parseInt(srid);
+                Promise<Void> bboxPromise = Promise.promise();
+
+                // Handle scenario where there's no bbox from the query, but we have a tokenBbox
+                if (finalQueryBbox == null && finalTokenBbox != null) {
+                    featureQuery.setBbox(finalTokenBbox, srid);
+                    bboxPromise.complete();
+                }
+                // Handle scenario where there's a bbox in the query param, but no tokenBbox
+                else if (finalQueryBbox != null && finalTokenBbox == null) {
+                    featureQuery.setBbox(finalQueryBbox, srid);
+                    bboxPromise.complete();
+                }
+                // Handle scenario where both query bbox and token bbox are provided
+                else if (finalQueryBbox != null && finalTokenBbox != null) {
+                    isIntersecting(finalQueryBbox, finalTokenBbox, sridInt)
+                            .compose(intersects -> {
+                                if (intersects) {
+                                    return getIntersection(finalQueryBbox, finalTokenBbox, sridInt)
+                                            .compose(intersection -> {
+                                                featureQuery.setBbox(intersection, srid);
+                                                return Future.succeededFuture();
+                                            });
+                                } else {
+                                    LOGGER.debug(BBOX_VIOLATES_CONSTRAINTS);
+                                    return Future.failedFuture(new OgcException(403, "Forbidden", BBOX_VIOLATES_CONSTRAINTS));
+                                }
                             })
-                            .onFailure(failed -> {
-                              LOGGER.error("Failed at getFeatures- {}",failed.getMessage());
-                              result.fail("Error!");
-                            });
-                        return result.future();
-                      });
-                })
-                .onFailure(fail -> {
-                  LOGGER.error("Failed at find_collection- {}",fail.getMessage());
-                  result.fail("Error!");
-                })));
-        return result.future();
+                            .onSuccess(v -> bboxPromise.complete())
+                            .onFailure(bboxPromise::fail);
+                } else {
+                    bboxPromise.complete();
+                }
+
+                return bboxPromise.future();
+            } else {
+                return Future.succeededFuture();
+            }
+        });
+
+        // Continue only after bboxFuture completes
+        return bboxFuture.compose(v -> sridOfStorageCrs.compose(srid ->
+                        client.withConnection(conn ->
+                                conn.preparedQuery("select datetime_key from collections_details where id = $1::uuid")
+                                        .collecting(collector)
+                                        .execute(Tuple.of(UUID.fromString(collectionId)))
+                                        .compose(conn1 -> {
+                                            if (conn1.value().get(0).getString("datetime_key") != null && datetimeValue != null ){
+                                                String datetimeKey = conn1.value().get(0).getString("datetime_key");
+                                                featureQuery.setDatetimeKey(datetimeKey);
+                                                featureQuery.setDatetime(datetimeValue);
+                                            }
+                                            LOGGER.debug("datetime_key: {}",conn1.value().get(0).getString("datetime_key"));
+                                            LOGGER.debug("<DBService> Sql query- {} ",  featureQuery.buildSqlString());
+                                            LOGGER.debug("Count Query- {}", featureQuery.buildSqlString("count"));
+
+                                            JsonObject resultJson = new JsonObject();
+                                            return conn.preparedQuery(featureQuery.buildSqlString("count"))
+                                                    .collecting(collectorT).execute()
+                                                    .compose(count -> {
+                                                        LOGGER.debug("Feature Count- {}", count.value().get("count"));
+                                                        int totalCount = count.value().get("count");
+                                                        resultJson.put("numberMatched", totalCount);
+
+                                                        return conn.preparedQuery(featureQuery.buildSqlString())
+                                                                .collecting(collector).execute()
+                                                                .map(SqlResult::value)
+                                                                .compose(success -> {
+                                                                    if (!success.isEmpty())
+                                                                        resultJson
+                                                                                .put("features", new JsonArray(success))
+                                                                                .put("numberReturned", success.size());
+                                                                    else
+                                                                        resultJson
+                                                                                .put("features", new JsonArray())
+                                                                                .put("numberReturned", 0);
+                                                                    resultJson.put("type", "FeatureCollection");
+                                                                    return Future.succeededFuture(resultJson);
+                                                                });
+                                                    });
+                                        })))
+                .onFailure(err -> {
+                    LOGGER.error("Failed at getFeatures - {}", err.getMessage());
+                    result.fail(err);
+                }));
     }
 
-  private Future<String> getSridOfStorageCrs(String collectionId) {
+    private Future<String> getSridOfStorageCrs(String collectionId) {
     LOGGER.info("getSridOfStorageCrs");
     Promise<String> result = Promise.promise();
     Collector<Row, ? , Map<String, Integer>> collector = Collectors.toMap(row -> row.getColumnName(0),
@@ -215,7 +261,45 @@ public class DatabaseServiceImpl implements DatabaseService{
     return result.future();
   }
 
-  @Override
+    private Future<Boolean> isIntersecting(String queryBbox, String tokenBbox, int srid) {
+        Promise<Boolean> result = Promise.promise();
+        String sql = "SELECT ST_Intersects(ST_MakeEnvelope(" + queryBbox + ", " + srid + "), ST_MakeEnvelope(" + tokenBbox + ", " + srid + "))";
+        client.withConnection(conn ->
+                conn.query(sql).execute()
+                        .onSuccess(rows -> {
+                            Boolean intersects = rows.iterator().next().getBoolean(0);
+                            result.complete(intersects);
+                        })
+                        .onFailure(result::fail)
+        );
+        return result.future();
+    }
+
+    private Future<String> getIntersection(String queryBbox, String tokenBbox, int srid) {
+        Promise<String> result = Promise.promise();
+        String sql = "SELECT ST_Extent(ST_Intersection(ST_MakeEnvelope(" + queryBbox + ", " + srid + "), ST_MakeEnvelope(" + tokenBbox + ", " + srid + ")))";
+        client.withConnection(conn ->
+                conn.query(sql).execute()
+                        .onSuccess(rows -> {
+                            String extent = rows.iterator().next().getString(0); // Format: BOX(xmin ymin,xmax ymax)
+                            if (extent == null) {
+                                result.fail("No intersection area");
+                            } else {
+                                String bbox = extent.replace("BOX(", "").replace(")", "").replace(",", " ");
+                                String[] parts = bbox.trim().split(" ");
+                                String formatted = parts[0] + "," + parts[1] + "," + parts[2] + "," + parts[3];
+                                LOGGER.debug("Intersection of token and query parameter bounding boxes: {}", formatted);
+                                result.complete(formatted);
+                            }
+                        })
+                        .onFailure(result::fail)
+        );
+        return result.future();
+    }
+
+
+
+    @Override
   public Future<Map<String, Integer>> isCrsValid(String collectionId, Map<String, String > queryParams) {
     Promise<Map<String, Integer>> result = Promise.promise();
     //check for both crs and bbox-crs
