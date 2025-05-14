@@ -74,6 +74,12 @@ public class Constants {
     public static final String API_CALLS_LIMIT_EXCEEDED = "API calls limit exceeded";
     public static final String DATA_USAGE_LIMIT_EXCEEDED = "Data usage limit exceeded";
     public static final String BBOX_VIOLATES_CONSTRAINTS = "Requested bbox is outside the allowed area";
+    public static final String INVALID_BBOX_FORMAT = "Invalid bbox format: must have exactly 4 elements (minLon, minLat, maxLon, maxLat)";
+    public static final String ERR_BBOX_NON_NUMERIC = "Bbox must contain only numeric values";
+    public static final String ERR_BBOX_NON_FINITE = "Bbox must contain finite numeric values (no NaN or Infinity)";
+    public static final String ERR_BBOX_LONGITUDE_RANGE = "Bbox longitude values must be between -180 and 180";
+    public static final String ERR_BBOX_LATITUDE_RANGE = "Bbox latitude values must be between -90 and 90";
+    public static final String ERR_BBOX_MIN_MAX_ORDER = "Bbox minimum values must be less than maximum values";
     public static final String NOT_AUTHORIZED = "Not Authorized";
     public static final String INVALID_COLLECTION_ID = "Invalid collection id";
     public static final String USER_NOT_AUTHORIZED =  "User is not authorised. Please contact DX AAA ";
