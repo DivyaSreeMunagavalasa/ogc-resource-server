@@ -222,4 +222,46 @@ public class TokenLimitsEnforcementHandlerIT {
         Response response = sendBBoxRequest(collectionId, token, bbox);
         response.then().statusCode(403).body(DESCRIPTION_KEY, is(BBOX_VIOLATES_CONSTRAINTS));
     }
+    @Test
+    @Description("Testing when the data usage limit is exceeded, even if the bbox is within the allowed spatial constraints")
+    public void testDataUsageLimitExceededWithBboxLimitsInRange() {
+        LOGGER.info("Testing when the data usage limit is exceeded but bounding box is within allowed spatial constraints");
+        String bbox = "-4.5,51.5,-2.5,52.5";
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.fromString("0ff3d306-9402-4430-8e18-6f95e4c03c97"))
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("dataUsage", "0:kb")
+                        .put("iat",sixMonthsAgo.getEpochSecond())
+                        .put("bbox", new JsonArray()
+                                .add(-5.0)
+                                .add(51.0)
+                                .add(-2.0)
+                                .add(53.0))))
+                .build();
+        Response response = sendBBoxRequest(collectionId, token, bbox);
+        response.then().statusCode(429).body(DESCRIPTION_KEY, is(DATA_USAGE_LIMIT_EXCEEDED));
+    }
+    @Test
+    @Description("Testing when the API hits limit is exceeded, even if the bbox is within the allowed spatial constraints")
+    public void testApiHitsLimitExceededWithBboxLimitsInRange() {
+        LOGGER.info("Testing when the API hits limit is exceeded but bounding box is within allowed spatial constraints");
+        String bbox = "-4.5,51.5,-2.5,52.5";
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.fromString("0ff3d306-9402-4430-8e18-6f95e4c03c97"))
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("apiHits", 0)
+                        .put("iat",sixMonthsAgo.getEpochSecond())
+                        .put("bbox", new JsonArray()
+                                .add(-5.0)
+                                .add(51.0)
+                                .add(-2.0)
+                                .add(53.0))))
+                .build();
+        Response response = sendBBoxRequest(collectionId, token, bbox);
+        response.then().statusCode(429).body(DESCRIPTION_KEY, is(API_CALLS_LIMIT_EXCEEDED));
+    }
 }
