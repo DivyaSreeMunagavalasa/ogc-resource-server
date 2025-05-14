@@ -165,6 +165,7 @@ public class TokenLimitsEnforcementHandlerIT {
         Response response = sendRequest(collectionId, token);
         response.then().statusCode(400).body(CODE_KEY, is("Bad Request"));
     }
+
     @Test
     @Description("Testing full intersection of query bbox with token bbox")
     public void testFullIntersectionOfQueryBboxWithTokenBbox() {
@@ -184,6 +185,7 @@ public class TokenLimitsEnforcementHandlerIT {
         Response response = sendBBoxRequest(collectionId, token, bbox);
         response.then().statusCode(200);
     }
+
     @Test
     @Description("Testing partial intersection of query bbox with token bbox")
     public void testPartialIntersectionOfQueryBboxWithTokenBbox() {
@@ -203,6 +205,7 @@ public class TokenLimitsEnforcementHandlerIT {
         Response response = sendBBoxRequest(collectionId, token, bbox);
         response.then().statusCode(200);
     }
+
     @Test
     @Description("Testing no intersection of query bbox with token bbox")
     public void testNoIntersectionOfQueryBboxWithTokenBbox() {
@@ -222,6 +225,7 @@ public class TokenLimitsEnforcementHandlerIT {
         Response response = sendBBoxRequest(collectionId, token, bbox);
         response.then().statusCode(403).body(DESCRIPTION_KEY, is(BBOX_VIOLATES_CONSTRAINTS));
     }
+
     @Test
     @Description("Testing when the data usage limit is exceeded, even if the bbox is within the allowed spatial constraints")
     public void testDataUsageLimitExceededWithBboxLimitsInRange() {
@@ -243,6 +247,7 @@ public class TokenLimitsEnforcementHandlerIT {
         Response response = sendBBoxRequest(collectionId, token, bbox);
         response.then().statusCode(429).body(DESCRIPTION_KEY, is(DATA_USAGE_LIMIT_EXCEEDED));
     }
+
     @Test
     @Description("Testing when the API hits limit is exceeded, even if the bbox is within the allowed spatial constraints")
     public void testApiHitsLimitExceededWithBboxLimitsInRange() {
@@ -263,5 +268,192 @@ public class TokenLimitsEnforcementHandlerIT {
                 .build();
         Response response = sendBBoxRequest(collectionId, token, bbox);
         response.then().statusCode(429).body(DESCRIPTION_KEY, is(API_CALLS_LIMIT_EXCEEDED));
+    }
+
+    @Test
+    @Description("Test handling of malformed bbox in token constraints")
+    public void testMalformedTokenBbox() {
+        LOGGER.info("Testing with malformed bbox in token constraints");
+        JsonArray malformedBbox = new JsonArray().add("a").add("b").add("c").add("d");
+        String queryParamBbox = "-4.5,51.5,-2.5,52.5";
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("bbox", malformedBbox)))
+                .build();
+        Response response = sendBBoxRequest(collectionId, token, queryParamBbox);
+        response.then().statusCode(400).body(DESCRIPTION_KEY, is(ERR_BBOX_NON_NUMERIC));
+    }
+
+    @Test
+    @Description("Test handling of invalid bbox in token constraints")
+    public void testInvalidTokenBbox() {
+        LOGGER.info("Testing with invalid bbox in token constraints");
+        JsonArray malformedBbox = new JsonArray().add(-5.0).add(51.0).add(-2.0);
+        String queryParamBbox = "-4.5,51.5,-2.5,52.5";
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("bbox", malformedBbox)))
+                .build();
+        Response response = sendBBoxRequest(collectionId, token, queryParamBbox);
+        response.then().statusCode(400).body(DESCRIPTION_KEY, is(INVALID_BBOX_FORMAT));
+    }
+
+    @Test
+    @Description("Test when west is greater than east in bbox inside token")
+    public void testBboxWestGreaterThanEastInToken() {
+        LOGGER.info("Testing bbox with west > east inside token");
+        String queryParamBbox = "-4.5,51.5,-2.5,52.5";
+        JsonArray bbox = new JsonArray().add(10.0).add(20.0).add(5.0).add(25.0); // west > east
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("bbox", bbox)))
+                .build();
+        Response response = sendBBoxRequest(collectionId, token, queryParamBbox);
+        response.then().statusCode(400).body(DESCRIPTION_KEY, is(ERR_BBOX_MIN_MAX_ORDER));
+    }
+
+    @Test
+    @Description("Test when south is greater than north in bbox inside token")
+    public void testBboxSouthGreaterThanNorthInToken() {
+        LOGGER.info("Testing bbox with south > north inside token");
+        String queryParamBbox = "-4.5,51.5,-2.5,52.5";
+        JsonArray bbox = new JsonArray().add(-10.0).add(30.0).add(-5.0).add(20.0); // south > north
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("bbox", bbox)))
+                .build();
+        Response response = sendBBoxRequest(collectionId, token, queryParamBbox);
+        response.then().statusCode(400).body(DESCRIPTION_KEY, is(ERR_BBOX_MIN_MAX_ORDER));
+    }
+
+    @Test
+    @Description("Test when minLon is less than -180 inside token")
+    public void testBboxMinLonOutOfRangeInToken() {
+        LOGGER.info("Testing bbox with minLon < -180 inside token");
+        String queryParamBbox = "-4.5,51.5,-2.5,52.5";
+        JsonArray bbox = new JsonArray().add(-181.0).add(10.0).add(50.0).add(20.0); // minLon < -180
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("bbox", bbox)))
+                .build();
+        Response response = sendBBoxRequest(collectionId, token, queryParamBbox);
+        response.then().statusCode(400).body(DESCRIPTION_KEY, is(ERR_BBOX_LONGITUDE_RANGE));
+    }
+
+    @Test
+    @Description("Test when maxLon is greater than 180 inside token")
+    public void testBboxMaxLonOutOfRangeInToken() {
+        LOGGER.info("Testing bbox with maxLon > 180 inside token");
+        String queryParamBbox = "-4.5,51.5,-2.5,52.5";
+        JsonArray bbox = new JsonArray().add(10.0).add(10.0).add(181.0).add(20.0); // maxLon > 180
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("bbox", bbox)))
+                .build();
+        Response response = sendBBoxRequest(collectionId, token, queryParamBbox);
+        response.then().statusCode(400).body(DESCRIPTION_KEY, is(ERR_BBOX_LONGITUDE_RANGE));
+    }
+
+    @Test
+    @Description("Test when minLat is less than -90 inside token")
+    public void testBboxMinLatOutOfRangeInToken() {
+        LOGGER.info("Testing bbox with minLat < -90 inside token");
+        String queryParamBbox = "-4.5,51.5,-2.5,52.5";
+        JsonArray bbox = new JsonArray().add(10.0).add(-91.0).add(50.0).add(20.0); // minLat < -90
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("bbox", bbox)))
+                .build();
+        Response response = sendBBoxRequest(collectionId, token, queryParamBbox);
+        response.then().statusCode(400).body(DESCRIPTION_KEY, is(ERR_BBOX_LATITUDE_RANGE));
+    }
+
+    @Test
+    @Description("Test when maxLat is greater than 90 inside token")
+    public void testBboxMaxLatOutOfRangeInToken() {
+        LOGGER.info("Testing bbox with maxLat > 90 inside token");
+        String queryParamBbox = "-4.5,51.5,-2.5,52.5";
+        JsonArray bbox = new JsonArray().add(10.0).add(10.0).add(50.0).add(91.0); // maxLat > 90
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("bbox", bbox)))
+                .build();
+        Response response = sendBBoxRequest(collectionId, token, queryParamBbox);
+        response.then().statusCode(400).body(DESCRIPTION_KEY, is(ERR_BBOX_LATITUDE_RANGE));
+    }
+
+    @Test
+    @Description("Test bbox with NaN value inside token")
+    public void testBboxWithNaNInToken() {
+        LOGGER.info("Testing bbox with NaN value inside token");
+        String queryParamBbox = "-4.5,51.5,-2.5,52.5";
+        JsonArray bbox = new JsonArray().add("NaN").add(10.0).add(50.0).add(20.0); // NaN value
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("bbox", bbox)))
+                .build();
+        Response response = sendBBoxRequest(collectionId, token, queryParamBbox);
+        response.then().statusCode(400).body(CODE_KEY, is("Bad Request"));
+    }
+
+    @Test
+    @Description("Test bbox with positive infinity inside token")
+    public void testBboxWithPositiveInfinityInToken() {
+        LOGGER.info("Testing bbox with positive infinity inside token");
+        String queryParamBbox = "-4.5,51.5,-2.5,52.5";
+        JsonArray bbox = new JsonArray().add(10.0).add(10.0).add("Infinity").add(20.0); // Positive Infinity
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("bbox", bbox)))
+                .build();
+        Response response = sendBBoxRequest(collectionId, token, queryParamBbox);
+        response.then().statusCode(400).body(CODE_KEY, is("Bad Request"));
+    }
+
+    @Test
+    @Description("Test bbox with negative infinity inside token")
+    public void testBboxWithNegativeInfinityInToken() {
+        LOGGER.info("Testing bbox with negative infinity inside token");
+        String queryParamBbox = "-4.5,51.5,-2.5,52.5";
+        JsonArray bbox = new JsonArray().add("-Infinity").add(10.0).add(50.0).add(20.0); // Negative Infinity
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("bbox", bbox)))
+                .build();
+        Response response = sendBBoxRequest(collectionId, token, queryParamBbox);
+        response.then().statusCode(400).body(CODE_KEY, is("Bad Request"));
     }
 }
