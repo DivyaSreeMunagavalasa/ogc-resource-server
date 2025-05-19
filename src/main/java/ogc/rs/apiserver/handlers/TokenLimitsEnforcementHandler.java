@@ -110,6 +110,10 @@ public class TokenLimitsEnforcementHandler implements Handler<RoutingContext> {
                     constraintHandled = true;
                     break;
 
+                case "bbox":
+                    // Known constraint, not enforced here.
+                    break;
+
                 default:
                     LOGGER.warn("Unknown usage constraint key: {}", key);
                     break;

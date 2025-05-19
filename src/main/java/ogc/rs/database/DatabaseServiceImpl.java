@@ -150,44 +150,52 @@ public class DatabaseServiceImpl implements DatabaseService{
                     tokenBbox = tokenBbox.replace("[", "").replace("]", "");
                 }
 
-                String finalQueryBbox = queryBbox;
-                String finalTokenBbox = tokenBbox;
-                int sridInt = Integer.parseInt(srid);
+                // Create a promise for the bbox processing
                 Promise<Void> bboxPromise = Promise.promise();
 
-                // Handle scenario where there's no bbox from the query, but we have a tokenBbox
-                if (finalQueryBbox == null && finalTokenBbox != null) {
-                    featureQuery.setBbox(finalTokenBbox, srid);
-                    bboxPromise.complete();
-                }
-                // Handle scenario where there's a bbox in the query param, but no tokenBbox
-                else if (finalQueryBbox != null && finalTokenBbox == null) {
-                    featureQuery.setBbox(finalQueryBbox, srid);
-                    bboxPromise.complete();
-                }
-                // Handle scenario where both query bbox and token bbox are provided
-                else if (finalQueryBbox != null && finalTokenBbox != null) {
-                    isIntersecting(finalQueryBbox, finalTokenBbox, sridInt)
-                            .compose(intersects -> {
-                                if (intersects) {
-                                    return getIntersection(finalQueryBbox, finalTokenBbox, sridInt)
-                                            .compose(intersection -> {
-                                                featureQuery.setBbox(intersection, srid);
-                                                return Future.succeededFuture();
-                                            });
-                                } else {
-                                    LOGGER.debug(BBOX_VIOLATES_CONSTRAINTS);
-                                    return Future.failedFuture(new OgcException(403, "Forbidden", BBOX_VIOLATES_CONSTRAINTS));
-                                }
-                            })
-                            .onSuccess(v -> bboxPromise.complete())
-                            .onFailure(bboxPromise::fail);
+                // Only check intersection if we have both bboxes
+                if (queryBbox != null && tokenBbox != null) {
+                    try {
+                        // Parse coordinates
+                        String[] parts1 = queryBbox.split(",");
+                        String[] parts2 = tokenBbox.split(",");
+
+                        double minX1 = Double.parseDouble(parts1[0]);
+                        double minY1 = Double.parseDouble(parts1[1]);
+                        double maxX1 = Double.parseDouble(parts1[2]);
+                        double maxY1 = Double.parseDouble(parts1[3]);
+
+                        double minX2 = Double.parseDouble(parts2[0]);
+                        double minY2 = Double.parseDouble(parts2[1]);
+                        double maxX2 = Double.parseDouble(parts2[2]);
+                        double maxY2 = Double.parseDouble(parts2[3]);
+
+                        // Check intersection with simple arithmetic
+                        boolean intersects = !(maxX1 < minX2 || minX1 > maxX2 || maxY1 < minY2 || minY1 > maxY2);
+
+                        if (intersects) {
+                            featureQuery.setBboxWhenTokenBboxExists(queryBbox, tokenBbox, srid);
+                            bboxPromise.complete();
+                        } else {
+                            LOGGER.debug(BBOX_VIOLATES_CONSTRAINTS);
+                            bboxPromise.fail(new OgcException(403, "Forbidden", BBOX_VIOLATES_CONSTRAINTS));
+                        }
+                    } catch (Exception e) {
+                        bboxPromise.fail(e);
+                    }
                 } else {
+                    // Handle single bbox case
+                    if (queryBbox != null) {
+                        featureQuery.setBbox(queryBbox, srid);
+                    } else if (tokenBbox != null) {
+                        featureQuery.setBbox(tokenBbox, srid);
+                    }
                     bboxPromise.complete();
                 }
 
                 return bboxPromise.future();
             } else {
+                // No bbox parameters, proceed directly
                 return Future.succeededFuture();
             }
         });
@@ -261,45 +269,7 @@ public class DatabaseServiceImpl implements DatabaseService{
     return result.future();
   }
 
-    private Future<Boolean> isIntersecting(String queryBbox, String tokenBbox, int srid) {
-        Promise<Boolean> result = Promise.promise();
-        String sql = "SELECT ST_Intersects(ST_MakeEnvelope(" + queryBbox + ", " + srid + "), ST_MakeEnvelope(" + tokenBbox + ", " + srid + "))";
-        client.withConnection(conn ->
-                conn.query(sql).execute()
-                        .onSuccess(rows -> {
-                            Boolean intersects = rows.iterator().next().getBoolean(0);
-                            result.complete(intersects);
-                        })
-                        .onFailure(result::fail)
-        );
-        return result.future();
-    }
-
-    private Future<String> getIntersection(String queryBbox, String tokenBbox, int srid) {
-        Promise<String> result = Promise.promise();
-        String sql = "SELECT ST_Extent(ST_Intersection(ST_MakeEnvelope(" + queryBbox + ", " + srid + "), ST_MakeEnvelope(" + tokenBbox + ", " + srid + ")))";
-        client.withConnection(conn ->
-                conn.query(sql).execute()
-                        .onSuccess(rows -> {
-                            String extent = rows.iterator().next().getString(0); // Format: BOX(xmin ymin,xmax ymax)
-                            if (extent == null) {
-                                result.fail("No intersection area");
-                            } else {
-                                String bbox = extent.replace("BOX(", "").replace(")", "").replace(",", " ");
-                                String[] parts = bbox.trim().split(" ");
-                                String formatted = parts[0] + "," + parts[1] + "," + parts[2] + "," + parts[3];
-                                LOGGER.debug("Intersection of token and query parameter bounding boxes: {}", formatted);
-                                result.complete(formatted);
-                            }
-                        })
-                        .onFailure(result::fail)
-        );
-        return result.future();
-    }
-
-
-
-    @Override
+  @Override
   public Future<Map<String, Integer>> isCrsValid(String collectionId, Map<String, String > queryParams) {
     Promise<Map<String, Integer>> result = Promise.promise();
     //check for both crs and bbox-crs
