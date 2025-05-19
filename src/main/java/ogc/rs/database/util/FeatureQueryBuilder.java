@@ -81,6 +81,49 @@ public class FeatureQueryBuilder {
 
     this.additionalParams = "where";
   }
+
+  public void setBboxWhenTokenBboxExists(String queryBbox, String tokenBbox, String storageCrs) {
+    // Prepare the query bbox part
+    String queryBboxCondition = "";
+    if (queryBbox != null) {
+      String queryCoordinates = queryBbox;
+      if (!bboxCrsSrid.isEmpty() && !bboxCrsSrid.equalsIgnoreCase(defaultCrsSrid))
+        queryCoordinates = queryCoordinates.concat(",").concat(bboxCrsSrid);
+      else
+        queryCoordinates = queryCoordinates.concat(",").concat(defaultCrsSrid);
+
+      if (bboxCrsSrid.equalsIgnoreCase(storageCrs))
+        queryBboxCondition = "st_intersects(geom, st_makeenvelope(" + queryCoordinates + "))";
+      else
+        queryBboxCondition = "st_intersects(geom, st_transform(st_makeenvelope(" + queryCoordinates + "),"+ storageCrs +"))";
+    }
+
+    // Prepare the token bbox part
+    String tokenBboxCondition = "";
+    if (tokenBbox != null) {
+      String tokenCoordinates = tokenBbox;
+      if (!bboxCrsSrid.isEmpty() && !bboxCrsSrid.equalsIgnoreCase(defaultCrsSrid))
+        tokenCoordinates = tokenCoordinates.concat(",").concat(bboxCrsSrid);
+      else
+        tokenCoordinates = tokenCoordinates.concat(",").concat(defaultCrsSrid);
+
+      if (bboxCrsSrid.equalsIgnoreCase(storageCrs))
+        tokenBboxCondition = "st_intersects(geom, st_makeenvelope(" + tokenCoordinates + "))";
+      else
+        tokenBboxCondition = "st_intersects(geom, st_transform(st_makeenvelope(" + tokenCoordinates + "),"+ storageCrs +"))";
+    }
+
+    // Combine conditions
+    if (!queryBboxCondition.isEmpty() && !tokenBboxCondition.isEmpty()) {
+      this.bbox = "(" + queryBboxCondition + " AND " + tokenBboxCondition + ")";
+    } else if (!queryBboxCondition.isEmpty()) {
+      this.bbox = queryBboxCondition;
+    } else if (!tokenBboxCondition.isEmpty()) {
+      this.bbox = tokenBboxCondition;
+    }
+    this.additionalParams = "where";
+  }
+
   public void setCrs (String crs) {
     // st_asgeojson(geometry, maxdecimaldigits, options); options = 0 means no extra options
     geoColumn = "cast(st_asgeojson(st_transform(geom," + crs + "), 9,0) as json)";
