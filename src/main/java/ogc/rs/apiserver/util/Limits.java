@@ -2,6 +2,8 @@ package ogc.rs.apiserver.util;
 
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -12,7 +14,7 @@ import static ogc.rs.apiserver.util.Constants.*;
  * Represents API usage, data usage, and spatial (bbox) limits extracted from a user's token.
  */
 public class Limits {
-
+    private static final Logger LOGGER = LogManager.getLogger(Limits.class);
     private final Long policyIssuedAt;
     private final Long dataUsageLimitInBytes;
     private final Long apiHitsLimit;
@@ -32,6 +34,7 @@ public class Limits {
      * @return Limits object, or null if limitsJson is null
      */
     public static Limits fromJson(JsonObject limitsJson) {
+
         if (limitsJson == null) {
             return null;
         }
@@ -135,6 +138,8 @@ public class Limits {
         double minLat = bbox.get(1);
         double maxLon = bbox.get(2);
         double maxLat = bbox.get(3);
+
+        LOGGER.debug("minLon, minLat, maxLon, maxLat in token bbox: {} {} {} {}", minLon, minLat, maxLon, maxLat);
 
         if (minLon < -180 || minLon > 180 || maxLon < -180 || maxLon > 180) {
             throw new OgcException(400, "Bad Request", ERR_BBOX_LONGITUDE_RANGE);

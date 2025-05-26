@@ -315,11 +315,24 @@ public class ApiServerVerticle extends AbstractVerticle {
     RequestParameters requestParameters = routingContext.get(ValidationHandler.REQUEST_CONTEXT_KEY);
     String collectionId = routingContext.request().path().split("/")[2];
     Integer featureId = requestParameters.pathParameter("featureId").getInteger();
+    AuthInfo user = routingContext.get(USER_KEY);
     Map<String, Object> queryParams = requestParameters.toJson().getJsonObject("query").getMap();
     Map<String, String> queryParamsMap = queryParams.entrySet()
         .stream()
         .collect(Collectors.toMap(Map.Entry::getKey, e -> (String) e.getValue()));
+    // Extract bbox limit from user's token constraints
+    JsonObject limitsJson = user.getConstraints().getJsonObject("limits");
+    Limits limits = Limits.fromJson(limitsJson);
+    if (limits != null && limits.getBboxLimit() != null) {
+      List<Double> tokenBboxList = limits.getBboxLimit();
+      String tokenBbox = "[" + tokenBboxList.stream()
+              .map(String::valueOf)
+              .collect(Collectors.joining(",")) + "]";
+      queryParamsMap.put("tokenBbox", tokenBbox);
+      LOGGER.debug("<APIServer> Token BBOX injected: {}", tokenBboxList);
+    }
     LOGGER.debug("<APIServer> QP- {}", queryParamsMap);
+
     Future<Map<String, Integer>> isCrsValid = dbService.isCrsValid(collectionId, queryParamsMap);
     isCrsValid
         .compose(crs -> dbService.getFeature(collectionId, featureId, queryParamsMap, crs))
@@ -379,7 +392,6 @@ public class ApiServerVerticle extends AbstractVerticle {
       queryParamsMap.put("tokenBbox", tokenBbox);
       LOGGER.debug("<APIServer> Token BBOX injected: {}", tokenBboxList);
     }
-
     LOGGER.debug("<APIServer> QP- {}", queryParamsMap);
 
     Future<Map<String, Integer>> isCrsValid = dbService.isCrsValid(collectionId, queryParamsMap);

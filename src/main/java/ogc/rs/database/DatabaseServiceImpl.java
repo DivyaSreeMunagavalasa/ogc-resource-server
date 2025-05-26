@@ -134,10 +134,11 @@ public class DatabaseServiceImpl implements DatabaseService{
 
         Future<String> sridOfStorageCrs = getSridOfStorageCrs(collectionId);
 
-        // Compose bbox handling
         Future<Void> bboxFuture = sridOfStorageCrs.compose(srid -> {
+            LOGGER.debug("srid is: {}", srid);
             if (queryParams.get("bbox") != null || queryParams.get("tokenBbox") != null) {
                 LOGGER.debug("Entered into bbox check");
+
                 String queryBbox = queryParams.get("bbox");
                 String tokenBbox = queryParams.get("tokenBbox");
                 LOGGER.debug("The query param bbox is : {}", queryBbox);
@@ -150,41 +151,38 @@ public class DatabaseServiceImpl implements DatabaseService{
                     tokenBbox = tokenBbox.replace("[", "").replace("]", "");
                 }
 
-                // Create a promise for the bbox processing
                 Promise<Void> bboxPromise = Promise.promise();
 
-                // Only check intersection if we have both bboxes
                 if (queryBbox != null && tokenBbox != null) {
-                    try {
-                        // Parse coordinates
-                        String[] parts1 = queryBbox.split(",");
-                        String[] parts2 = tokenBbox.split(",");
-
-                        double minX1 = Double.parseDouble(parts1[0]);
-                        double minY1 = Double.parseDouble(parts1[1]);
-                        double maxX1 = Double.parseDouble(parts1[2]);
-                        double maxY1 = Double.parseDouble(parts1[3]);
-
-                        double minX2 = Double.parseDouble(parts2[0]);
-                        double minY2 = Double.parseDouble(parts2[1]);
-                        double maxX2 = Double.parseDouble(parts2[2]);
-                        double maxY2 = Double.parseDouble(parts2[3]);
-
-                        // Check intersection with simple arithmetic
-                        boolean intersects = !(maxX1 < minX2 || minX1 > maxX2 || maxY1 < minY2 || minY1 > maxY2);
-
-                        if (intersects) {
-                            featureQuery.setBboxWhenTokenBboxExists(queryBbox, tokenBbox, srid);
-                            bboxPromise.complete();
-                        } else {
-                            LOGGER.debug(BBOX_VIOLATES_CONSTRAINTS);
-                            bboxPromise.fail(new OgcException(403, "Forbidden", BBOX_VIOLATES_CONSTRAINTS));
-                        }
-                    } catch (Exception e) {
-                        bboxPromise.fail(e);
-                    }
+                    // Use PostGIS to check bbox intersection
+                    String sql = "SELECT ST_Intersects(" +
+                            "ST_Transform(ST_MakeEnvelope(" + queryBbox + ", " + srid + "), 4326), " +
+                            "ST_MakeEnvelope(" + tokenBbox + ", 4326)" +
+                            ")";
+                    String finalQueryBbox = queryBbox;
+                    String finalTokenBbox = tokenBbox;
+                    client.query(sql).execute()
+                            .onSuccess(rows -> {
+                                if (rows.iterator().hasNext()) {
+                                    Row row = rows.iterator().next();
+                                    boolean intersects = row.getBoolean(0);
+                                    if (intersects) {
+                                        LOGGER.debug("both token bbox and query param bbox are getting intersected...");
+                                        featureQuery.setBboxWhenTokenBboxExists(finalQueryBbox, finalTokenBbox, srid);
+                                        bboxPromise.complete();
+                                    } else {
+                                        LOGGER.debug(BBOX_VIOLATES_CONSTRAINTS);
+                                        bboxPromise.fail(new OgcException(403, "Forbidden", BBOX_VIOLATES_CONSTRAINTS));
+                                    }
+                                } else {
+                                    bboxPromise.fail("No result from ST_Intersects check.");
+                                }
+                            })
+                            .onFailure(err -> {
+                                LOGGER.debug("PostGIS intersection check failed: {}", err.getMessage());
+                                bboxPromise.fail(err);
+                            });
                 } else {
-                    // Handle single bbox case
                     if (queryBbox != null) {
                         featureQuery.setBbox(queryBbox, srid);
                     } else if (tokenBbox != null) {
@@ -195,7 +193,6 @@ public class DatabaseServiceImpl implements DatabaseService{
 
                 return bboxPromise.future();
             } else {
-                // No bbox parameters, proceed directly
                 return Future.succeededFuture();
             }
         });
@@ -289,7 +286,7 @@ public class DatabaseServiceImpl implements DatabaseService{
           .collecting(crsCollector)
           .execute(Tuple.of(UUID.fromString(collectionId)))
           .onSuccess(success -> {
-            LOGGER.debug("CRS:SRID-\n{}",success.toString() );
+            LOGGER.debug("CRS:SRID-\n{}",success.value() );
             if (!success.value().containsKey(requestCrs)) {
               result.fail(new OgcException(400, "Bad Request", "Collection does not support this crs"));
             }
@@ -307,39 +304,79 @@ public class DatabaseServiceImpl implements DatabaseService{
     return result.future();
   }
 
-  @Override
-  public Future<JsonObject> getFeature(String collectionId, Integer featureId, Map<String, String> queryParams,
-                                       Map<String, Integer> crs) {
-    LOGGER.info("getFeature");
-    Promise<JsonObject> result = Promise.promise();
+    @Override
+    public Future<JsonObject> getFeature(String collectionId, Integer featureId, Map<String, String> queryParams,
+                                         Map<String, Integer> crs) {
+        LOGGER.info("getFeature");
+        Promise<JsonObject> result = Promise.promise();
 
-    Collector<Row, ? , List<JsonObject>> collector = Collectors.mapping(Row::toJson, Collectors.toList());
-    // Collector<Row, ? , Map<String, Integer>> collectorT = Collectors.toMap(row -> row.getColumnName(0)
-     // , row -> row.getInteger("count"));
-    String srid = String.valueOf(crs.get(queryParams.get("crs")));
-    String geoColumn = "cast(st_asgeojson(st_transform(geom," + srid + "),9,0) as json)";
-    String sqlQuery = "Select id, 'Feature' as type," + geoColumn + " as geometry, " +
-        " (row_to_json(\"" + collectionId + "\")::jsonb - 'id' - 'geom') as properties" +
-        " from \"" + collectionId + "\" where id=$1::int" ;
-    client.withConnection(conn ->
-        conn.preparedQuery(sqlQuery)
-          .collecting(collector).execute(Tuple.of(featureId))
-          .map(SqlResult::value)
-          .onSuccess(success -> {
-            if (success.isEmpty())
-              result.fail(new OgcException(404, "Not found", "Feature not found"));
-            else
-              result.complete(success.get(0));
-          })
-          .onFailure(failed -> {
-            LOGGER.error("Failed at getFeature- {}",failed.getMessage());
-            result.fail("Error!");
-          }));
-      return result.future();
-  }
+        Collector<Row, ?, List<JsonObject>> collector = Collectors.mapping(Row::toJson, Collectors.toList());
+        String tokenBbox = queryParams.get("tokenBbox");
+        String srid = String.valueOf(crs.get(queryParams.get("crs")));
+        String geoColumn = "cast(st_asgeojson(st_transform(geom," + srid + "),9,0) as json)";
 
+        // Step 1: Check if feature exists without bbox filter
+        String checkExistSql = "SELECT 1 FROM \"" + collectionId + "\" WHERE id = $1::int";
 
-  @Override
+        client.withConnection(conn ->
+                conn.preparedQuery(checkExistSql).execute(Tuple.of(featureId))
+                        .compose(existsResult -> {
+                            if (existsResult.rowCount() == 0) {
+                                // Feature does not exist at all
+                                return Future.failedFuture(new OgcException(404, "Not found", "Feature not found"));
+                            } else if (tokenBbox != null && !tokenBbox.isEmpty()) {
+                                // Step 2: Feature exists, apply bbox filter
+                                String cleanTokenBbox = tokenBbox.replace("[", "").replace("]", "");
+                                LOGGER.debug("token bbox : {}", cleanTokenBbox);
+                                String bboxFilter = "ST_Intersects(ST_Transform(geom, 4326), ST_MakeEnvelope(" + cleanTokenBbox + ", 4326))";
+
+                                String sqlWithBbox = "SELECT id, 'Feature' AS type, " + geoColumn + " as geometry, " +
+                                        "(row_to_json(\"" + collectionId + "\")::jsonb - 'id' - 'geom') as properties " +
+                                        "FROM \"" + collectionId + "\" WHERE id = $1::int AND " + bboxFilter;
+
+                                return conn.preparedQuery(sqlWithBbox)
+                                        .collecting(collector)
+                                        .execute(Tuple.of(featureId))
+                                        .map(SqlResult::value)
+                                        .compose(features -> {
+                                            if (features.isEmpty()) {
+                                                // Feature exists but outside bbox limit
+                                                return Future.failedFuture(new OgcException(403, "Forbidden", "Feature not found within the bbox limit"));
+                                            } else {
+                                                return Future.succeededFuture(features.get(0));
+                                            }
+                                        });
+                            } else {
+                                // No bbox filter, just get feature
+                                String sqlNoBbox = "SELECT id, 'Feature' AS type, " + geoColumn + " as geometry, " +
+                                        "(row_to_json(\"" + collectionId + "\")::jsonb - 'id' - 'geom') as properties " +
+                                        "FROM \"" + collectionId + "\" WHERE id = $1::int";
+
+                                return conn.preparedQuery(sqlNoBbox)
+                                        .collecting(collector)
+                                        .execute(Tuple.of(featureId))
+                                        .map(SqlResult::value)
+                                        .map(features -> features.get(0));
+                            }
+                        })
+        ).onComplete(ar -> {
+            if (ar.succeeded()) {
+                result.complete(ar.result());
+            } else {
+                Throwable cause = ar.cause();
+                if (cause instanceof OgcException) {
+                    result.fail(cause);
+                } else {
+                    LOGGER.error("Failed at getFeature - {}", cause.getMessage(), cause);
+                    result.fail(new OgcException(500, "Internal Server Error", cause.getMessage()));
+                }
+            }
+        });
+
+        return result.future();
+    }
+
+    @Override
   public Future<List<JsonObject>> getStacCollections() {
     Promise<List<JsonObject>> result = Promise.promise();
     Collector<Row, ?, List<JsonObject>> collector =
