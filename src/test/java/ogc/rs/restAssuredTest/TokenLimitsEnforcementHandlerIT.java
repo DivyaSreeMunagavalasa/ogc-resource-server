@@ -456,4 +456,28 @@ public class TokenLimitsEnforcementHandlerIT {
         Response response = sendBBoxRequest(collectionId, token, queryParamBbox);
         response.then().statusCode(400).body(CODE_KEY, is("Bad Request"));
     }
+
+    @Test
+    @Description("Test bbox limit enforcement at /items/{featureId} endpoint")
+    public void testBboxLimitsInFeatureIdEndpoint(){
+        LOGGER.info("Testing bbox limit enforcement at /items/{featureId} endpoint");
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("bbox", new JsonArray()
+                                .add(-5.0)
+                                .add(51.0)
+                                .add(-2.0)
+                                .add(53.0))))
+                .build();
+        Response response =
+                given().pathParam("collectionId", collectionId)
+                        .pathParam("featureId", 1)
+                        .auth().oauth2(token)
+                        .contentType("application/json")
+                        .when().get("/collections/{collectionId}/items/{featureId}");
+        response.then().statusCode(403).body(DESCRIPTION_KEY, is("Feature not found within the bbox limit"));
+    }
 }

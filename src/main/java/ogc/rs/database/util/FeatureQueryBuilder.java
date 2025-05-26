@@ -83,35 +83,35 @@ public class FeatureQueryBuilder {
   }
 
   public void setBboxWhenTokenBboxExists(String queryBbox, String tokenBbox, String storageCrs) {
-    // Prepare the query bbox part
+    LOGGER.debug("storage crs is : {}", storageCrs);
+    LOGGER.debug("bbox crs srid is: {}", bboxCrsSrid);
     String queryBboxCondition = "";
-    if (queryBbox != null) {
-      String queryCoordinates = queryBbox;
-      if (!bboxCrsSrid.isEmpty() && !bboxCrsSrid.equalsIgnoreCase(defaultCrsSrid))
-        queryCoordinates = queryCoordinates.concat(",").concat(bboxCrsSrid);
-      else
-        queryCoordinates = queryCoordinates.concat(",").concat(defaultCrsSrid);
-
-      if (bboxCrsSrid.equalsIgnoreCase(storageCrs))
-        queryBboxCondition = "st_intersects(geom, st_makeenvelope(" + queryCoordinates + "))";
-      else
-        queryBboxCondition = "st_intersects(geom, st_transform(st_makeenvelope(" + queryCoordinates + "),"+ storageCrs +"))";
-    }
-
-    // Prepare the token bbox part
     String tokenBboxCondition = "";
-    if (tokenBbox != null) {
-      String tokenCoordinates = tokenBbox;
-      if (!bboxCrsSrid.isEmpty() && !bboxCrsSrid.equalsIgnoreCase(defaultCrsSrid))
-        tokenCoordinates = tokenCoordinates.concat(",").concat(bboxCrsSrid);
-      else
-        tokenCoordinates = tokenCoordinates.concat(",").concat(defaultCrsSrid);
 
-      if (bboxCrsSrid.equalsIgnoreCase(storageCrs))
-        tokenBboxCondition = "st_intersects(geom, st_makeenvelope(" + tokenCoordinates + "))";
-      else
-        tokenBboxCondition = "st_intersects(geom, st_transform(st_makeenvelope(" + tokenCoordinates + "),"+ storageCrs +"))";
+    // Prepare query bbox condition if provided
+    if (queryBbox != null && !queryBbox.isEmpty()) {
+      String queryCoordinates = queryBbox + "," +
+              (bboxCrsSrid != null && !bboxCrsSrid.equalsIgnoreCase(defaultCrsSrid)
+                      ? bboxCrsSrid
+                      : defaultCrsSrid);
+
+      queryBboxCondition = bboxCrsSrid != null && bboxCrsSrid.equalsIgnoreCase(storageCrs)
+              ? "ST_Intersects(geom, ST_MakeEnvelope(" + queryCoordinates + "))"
+              : "ST_Intersects(ST_Transform(geom, " + defaultCrsSrid + "), ST_Transform(ST_MakeEnvelope(" + queryCoordinates + "), " + defaultCrsSrid + "))";
     }
+
+    LOGGER.debug("query bbox condition is : {}", queryBboxCondition);
+
+    // Prepare token bbox condition if provided
+    if (tokenBbox != null && !tokenBbox.isEmpty()) {
+      String tokenCoordinates = tokenBbox + "," + defaultCrsSrid;
+
+      tokenBboxCondition = storageCrs != null && storageCrs.equalsIgnoreCase(defaultCrsSrid)
+              ? "ST_Intersects(geom, ST_MakeEnvelope(" + tokenCoordinates + "))"
+              : "ST_Intersects(ST_Transform(geom, " + defaultCrsSrid + "), ST_MakeEnvelope(" + tokenCoordinates + "))";
+    }
+
+    LOGGER.debug("token bbox condition is: {}", tokenBboxCondition);
 
     // Combine conditions
     if (!queryBboxCondition.isEmpty() && !tokenBboxCondition.isEmpty()) {
@@ -121,7 +121,10 @@ public class FeatureQueryBuilder {
     } else if (!tokenBboxCondition.isEmpty()) {
       this.bbox = tokenBboxCondition;
     }
-    this.additionalParams = "where";
+
+    if (this.bbox != null && !this.bbox.isEmpty()) {
+      this.additionalParams = "WHERE";
+    }
   }
 
   public void setCrs (String crs) {

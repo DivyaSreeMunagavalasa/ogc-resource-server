@@ -52,7 +52,7 @@ public class TokenLimitsEnforcementHandler implements Handler<RoutingContext> {
             return;
         }
 
-        LOGGER.debug("Usage Limit Enforcement Handler invoked");
+        LOGGER.debug("Token Limits Enforcement Handler invoked");
 
         AuthInfo user = routingContext.get(USER_KEY);
         String userId = user.getRole() == AuthInfo.RoleEnum.delegate
