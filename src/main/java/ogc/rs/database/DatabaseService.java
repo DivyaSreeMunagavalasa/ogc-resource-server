@@ -61,6 +61,14 @@ public interface DatabaseService {
     Future<Long> getTotalDataUsage(String userId, String apiPath, String collectionId, long policyIssuedAt);
 
     /**
+     * Checks if all specified feature IDs exist in the given collection table.
+     *
+     * @param collectionId The collection (table) ID to check
+     * @param featureIds List of feature IDs to validate
+     * @return Future<Boolean> true if all features exist, false otherwise
+     */
+    Future<Boolean> checkFeatureExists(String collectionId, List<String> featureIds);
+    /**
      * Get OGC Feature Collection metadata to be used for OpenAPI spec generation.
      *
      * @param existingCollectionUuidIds UUID IDs of collections that are already part of the spec.
