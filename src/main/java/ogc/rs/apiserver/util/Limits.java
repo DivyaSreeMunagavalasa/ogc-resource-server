@@ -6,12 +6,14 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static ogc.rs.apiserver.util.Constants.*;
 
 /**
- * Represents API usage, data usage, and spatial (bbox) limits extracted from a user's token.
+ * Represents API usage, data usage, spatial (bbox), and feature limits extracted from a user's token.
  */
 public class Limits {
     private static final Logger LOGGER = LogManager.getLogger(Limits.class);
@@ -19,18 +21,21 @@ public class Limits {
     private final Long dataUsageLimitInBytes;
     private final Long apiHitsLimit;
     private final List<Double> bboxLimit;
+    private final Map<String, List<String>> featLimit;
 
-    private Limits(Long policyIssuedAt, Long dataUsageLimitInBytes, Long apiHitsLimit, List<Double> bboxLimit) {
+    private Limits(Long policyIssuedAt, Long dataUsageLimitInBytes, Long apiHitsLimit,
+                   List<Double> bboxLimit, Map<String, List<String>> featLimit) {
         this.policyIssuedAt = policyIssuedAt;
         this.dataUsageLimitInBytes = dataUsageLimitInBytes;
         this.apiHitsLimit = apiHitsLimit;
         this.bboxLimit = bboxLimit;
+        this.featLimit = featLimit;
     }
 
     /**
      * Parses the JsonObject representing limits and constructs a Limits instance.
      *
-     * @param limitsJson JsonObject with fields like "iat", "dataUsage", "apiHits", "bbox"
+     * @param limitsJson JsonObject with fields like "iat", "dataUsage", "apiHits", "bbox", "feat"
      * @return Limits object, or null if limitsJson is null
      */
     public static Limits fromJson(JsonObject limitsJson) {
@@ -57,7 +62,12 @@ public class Limits {
             bbox = parseBboxLimit(limitsJson.getJsonArray("bbox"));
         }
 
-        return new Limits(iat, dataUsageBytes, apiHits, bbox);
+        Map<String, List<String>> feat = null;
+        if (limitsJson.containsKey("feat")) {
+            feat = parseFeatLimit(limitsJson.getJsonObject("feat"));
+        }
+
+        return new Limits(iat, dataUsageBytes, apiHits, bbox, feat);
     }
 
     /**
@@ -156,6 +166,45 @@ public class Limits {
         return bbox;
     }
 
+    /**
+     * Parses feature limits from the token.
+     * Expected format: {"collectionId": ["featureId1", "featureId2", ...]}
+     *
+     * @param featObject JsonObject containing collection to feature ID mappings
+     * @return Map of collection IDs to lists of allowed feature IDs
+     * @throws OgcException if the format is invalid
+     */
+    private static Map<String, List<String>> parseFeatLimit(JsonObject featObject) {
+        if (featObject == null || featObject.isEmpty()) {
+            return null;
+        }
+
+        Map<String, List<String>> featMap = new HashMap<>();
+
+        for (String collectionId : featObject.fieldNames()) {
+            JsonArray featureIds = featObject.getJsonArray(collectionId);
+            if (featureIds == null) {
+                throw new OgcException(400, "Bad Request", "Invalid feature limit format for collection: " + collectionId);
+            }
+
+            List<String> featureIdList = new ArrayList<>();
+            for (int i = 0; i < featureIds.size(); i++) {
+                Object featureId = featureIds.getValue(i);
+                if (featureId != null) {
+                    featureIdList.add(featureId.toString());
+                }
+            }
+
+            if (featureIdList.size() > 10) {
+                throw new OgcException(400, "Bad Request", "Maximum 10 feature IDs allowed per collection");
+            }
+
+            featMap.put(collectionId, featureIdList);
+        }
+
+        return featMap;
+    }
+
     public Long getPolicyIssuedAt() {
         return policyIssuedAt;
     }
@@ -170,5 +219,9 @@ public class Limits {
 
     public List<Double> getBboxLimit() {
         return bboxLimit;
+    }
+
+    public Map<String, List<String>> getFeatLimit() {
+        return featLimit;
     }
 }

@@ -318,28 +318,51 @@ public class ApiServerVerticle extends AbstractVerticle {
     AuthInfo user = routingContext.get(USER_KEY);
     Map<String, Object> queryParams = requestParameters.toJson().getJsonObject("query").getMap();
     Map<String, String> queryParamsMap = queryParams.entrySet()
-        .stream()
-        .collect(Collectors.toMap(Map.Entry::getKey, e -> (String) e.getValue()));
-    // Extract bbox limit from user's token constraints
+            .stream()
+            .collect(Collectors.toMap(Map.Entry::getKey, e -> (String) e.getValue()));
+
+    // Extract limits from user's token constraints
     JsonObject limitsJson = user.getConstraints().getJsonObject("limits");
     Limits limits = Limits.fromJson(limitsJson);
-    if (limits != null && limits.getBboxLimit() != null) {
-      List<Double> tokenBboxList = limits.getBboxLimit();
-      String tokenBbox = "[" + tokenBboxList.stream()
-              .map(String::valueOf)
-              .collect(Collectors.joining(",")) + "]";
-      queryParamsMap.put("tokenBbox", tokenBbox);
-      LOGGER.debug("<APIServer> Token BBOX injected: {}", tokenBboxList);
+
+    if (limits != null) {
+      // Extract bbox limit from user's token constraints
+      if (limits.getBboxLimit() != null) {
+        List<Double> tokenBboxList = limits.getBboxLimit();
+        String tokenBbox = "[" + tokenBboxList.stream()
+                .map(String::valueOf)
+                .collect(Collectors.joining(",")) + "]";
+        queryParamsMap.put("tokenBbox", tokenBbox);
+        LOGGER.debug("<APIServer> Token BBOX injected: {}", tokenBboxList);
+      }
+
+      // Extract feature limits from user's token constraints
+      if (limits.getFeatLimit() != null) {
+        Map<String, List<String>> featLimits = limits.getFeatLimit();
+
+          String collectionIdFromToken = featLimits.keySet().iterator().next();
+
+          List<String> allowedFeatureIds = featLimits.get(collectionIdFromToken);
+          String featLimitIds = String.join(",", allowedFeatureIds);
+          queryParamsMap.put("featLimit", featLimitIds);
+          LOGGER.debug("<APIServer> Feature limits injected for collection {}: {}", collectionIdFromToken, featLimitIds);
+
+          String boundaryCollectionId = featLimits.keySet().iterator().next();
+          queryParamsMap.put("boundaryCollectionId", boundaryCollectionId);
+          LOGGER.debug("<APIServer> Boundary collection ID: {}", boundaryCollectionId);
+
+      }
     }
+
     LOGGER.debug("<APIServer> QP- {}", queryParamsMap);
 
     Future<Map<String, Integer>> isCrsValid = dbService.isCrsValid(collectionId, queryParamsMap);
     isCrsValid
-        .compose(crs -> dbService.getFeature(collectionId, featureId, queryParamsMap, crs))
-        .onSuccess(success -> {
+            .compose(crs -> dbService.getFeature(collectionId, featureId, queryParamsMap, crs))
+            .onSuccess(success -> {
               // TODO: Add base_path from config
               success.put("links", new JsonArray()
-                  .add(new JsonObject().put("href", hostName + ogcBasePath + COLLECTIONS + "/" + collectionId + "/items/"
+                      .add(new JsonObject().put("href", hostName + ogcBasePath + COLLECTIONS + "/" + collectionId + "/items/"
                                       + featureId)
                               .put("rel", "self")
                               .put("type", "application/geo+json"))
@@ -350,22 +373,22 @@ public class ApiServerVerticle extends AbstractVerticle {
               routingContext.put("response", success.toString());
               routingContext.put("statusCode", 200);
               routingContext.put(
-                  "crs", "<" + queryParamsMap.getOrDefault("crs", DEFAULT_SERVER_CRS) + ">");
+                      "crs", "<" + queryParamsMap.getOrDefault("crs", DEFAULT_SERVER_CRS) + ">");
               routingContext.next();
             })
-        .onFailure(
-            failed -> {
-              if (failed instanceof OgcException) {
-                routingContext.put("response", ((OgcException) failed).getJson().toString());
-                routingContext.put("statusCode", ((OgcException) failed).getStatusCode());
-              } else {
-                OgcException ogcException =
-                    new OgcException(500, "Internal Server Error", "Internal Server Error");
-                routingContext.put("response", ogcException.getJson().toString());
-                routingContext.put("statusCode", ogcException.getStatusCode());
-              }
-              routingContext.next();
-            });
+            .onFailure(
+                    failed -> {
+                      if (failed instanceof OgcException) {
+                        routingContext.put("response", ((OgcException) failed).getJson().toString());
+                        routingContext.put("statusCode", ((OgcException) failed).getStatusCode());
+                      } else {
+                        OgcException ogcException =
+                                new OgcException(500, "Internal Server Error", "Internal Server Error");
+                        routingContext.put("response", ogcException.getJson().toString());
+                        routingContext.put("statusCode", ogcException.getStatusCode());
+                      }
+                      routingContext.next();
+                    });
   }
 
   public void getFeatures(RoutingContext routingContext) {

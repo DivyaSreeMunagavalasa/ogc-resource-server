@@ -10,7 +10,6 @@ import io.vertx.core.json.JsonObject;
 import io.vertx.pgclient.PgPool;
 import io.vertx.sqlclient.*;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collector;
 import java.util.stream.Collectors;
 import ogc.rs.apiserver.router.RouterManager;
@@ -312,10 +311,12 @@ public class DatabaseServiceImpl implements DatabaseService{
 
         Collector<Row, ?, List<JsonObject>> collector = Collectors.mapping(Row::toJson, Collectors.toList());
         String tokenBbox = queryParams.get("tokenBbox");
+        String featLimit = queryParams.get("featLimit");
+        String boundaryCollectionId = queryParams.get("boundaryCollectionId");
         String srid = String.valueOf(crs.get(queryParams.get("crs")));
         String geoColumn = "cast(st_asgeojson(st_transform(geom," + srid + "),9,0) as json)";
 
-        // Step 1: Check if feature exists without bbox filter
+        // Step 1: Check if feature exists without any filters
         String checkExistSql = "SELECT 1 FROM \"" + collectionId + "\" WHERE id = $1::int";
 
         client.withConnection(conn ->
@@ -324,40 +325,11 @@ public class DatabaseServiceImpl implements DatabaseService{
                             if (existsResult.rowCount() == 0) {
                                 // Feature does not exist at all
                                 return Future.failedFuture(new OgcException(404, "Not found", "Feature not found"));
-                            } else if (tokenBbox != null && !tokenBbox.isEmpty()) {
-                                // Step 2: Feature exists, apply bbox filter
-                                String cleanTokenBbox = tokenBbox.replace("[", "").replace("]", "");
-                                LOGGER.debug("token bbox : {}", cleanTokenBbox);
-                                String bboxFilter = "ST_Intersects(ST_Transform(geom, 4326), ST_MakeEnvelope(" + cleanTokenBbox + ", 4326))";
-
-                                String sqlWithBbox = "SELECT id, 'Feature' AS type, " + geoColumn + " as geometry, " +
-                                        "(row_to_json(\"" + collectionId + "\")::jsonb - 'id' - 'geom') as properties " +
-                                        "FROM \"" + collectionId + "\" WHERE id = $1::int AND " + bboxFilter;
-
-                                return conn.preparedQuery(sqlWithBbox)
-                                        .collecting(collector)
-                                        .execute(Tuple.of(featureId))
-                                        .map(SqlResult::value)
-                                        .compose(features -> {
-                                            if (features.isEmpty()) {
-                                                // Feature exists but outside bbox limit
-                                                return Future.failedFuture(new OgcException(403, "Forbidden", "Feature not found within the bbox limit"));
-                                            } else {
-                                                return Future.succeededFuture(features.get(0));
-                                            }
-                                        });
-                            } else {
-                                // No bbox filter, just get feature
-                                String sqlNoBbox = "SELECT id, 'Feature' AS type, " + geoColumn + " as geometry, " +
-                                        "(row_to_json(\"" + collectionId + "\")::jsonb - 'id' - 'geom') as properties " +
-                                        "FROM \"" + collectionId + "\" WHERE id = $1::int";
-
-                                return conn.preparedQuery(sqlNoBbox)
-                                        .collecting(collector)
-                                        .execute(Tuple.of(featureId))
-                                        .map(SqlResult::value)
-                                        .map(features -> features.get(0));
                             }
+
+                            // Feature exists, now apply filters
+                            return applySpatialFiltersAndGetFeature(conn, collectionId, featureId, tokenBbox,
+                                    featLimit, boundaryCollectionId, geoColumn, collector);
                         })
         ).onComplete(ar -> {
             if (ar.succeeded()) {
@@ -372,6 +344,106 @@ public class DatabaseServiceImpl implements DatabaseService{
                 }
             }
         });
+
+        return result.future();
+    }
+
+    private Future<JsonObject> applySpatialFiltersAndGetFeature(SqlConnection conn, String collectionId, Integer featureId,
+                                                                String tokenBbox, String featLimit, String boundaryCollectionId,
+                                                                String geoColumn, Collector<Row, ?, List<JsonObject>> collector) {
+
+        StringBuilder sqlBuilder = new StringBuilder();
+        sqlBuilder.append("SELECT request_feature.id, 'Feature' AS type, ")
+                .append("cast(st_asgeojson(st_transform(request_feature.geom,")
+                .append(geoColumn.substring(geoColumn.indexOf(",") + 1))
+                .append(" as geometry, ")
+                .append("(row_to_json(request_feature)::jsonb - 'id' - 'geom') as properties ");
+
+        boolean hasFeatLimit = featLimit != null && !featLimit.isEmpty() && boundaryCollectionId != null;
+        boolean hasBboxLimit = tokenBbox != null && !tokenBbox.isEmpty();
+
+        if (hasFeatLimit) {
+            // Use spatial intersection with boundary collection
+            sqlBuilder.append("FROM \"").append(collectionId).append("\" AS request_feature ")
+                    .append("JOIN \"").append(boundaryCollectionId).append("\" AS token_feature ")
+                    .append("ON ST_Intersects(request_feature.geom, token_feature.geom) ")
+                    .append("WHERE request_feature.id = $1::int ")
+                    .append("AND token_feature.id IN (").append(featLimit).append(")");
+        } else if (hasBboxLimit) {
+            // Only bbox filter
+            String cleanTokenBbox = tokenBbox.replace("[", "").replace("]", "");
+            sqlBuilder.append("FROM \"").append(collectionId).append("\" AS request_feature ")
+                    .append("WHERE request_feature.id = $1::int ")
+                    .append("AND ST_Intersects(ST_Transform(request_feature.geom, 4326), ST_MakeEnvelope(")
+                    .append(cleanTokenBbox).append(", 4326))");
+        } else {
+            // No filters, just get the feature
+            sqlBuilder.append("FROM \"").append(collectionId).append("\" AS request_feature ")
+                    .append("WHERE request_feature.id = $1::int");
+        }
+
+        String finalSql = sqlBuilder.toString();
+        LOGGER.debug("Executing query: {}", finalSql);
+
+        return conn.preparedQuery(finalSql)
+                .collecting(collector)
+                .execute(Tuple.of(featureId))
+                .map(SqlResult::value)
+                .compose(features -> {
+                    if (features.isEmpty()) {
+                        if (hasFeatLimit) {
+                            return Future.failedFuture(new OgcException(403, "Forbidden",
+                                    "Feature not found within the allowed feature boundaries"));
+                        } else if (hasBboxLimit) {
+                            return Future.failedFuture(new OgcException(403, "Forbidden",
+                                    "Feature not found within the bbox limit"));
+                        } else {
+                            return Future.failedFuture(new OgcException(404, "Not found", "Feature not found"));
+                        }
+                    } else {
+                        return Future.succeededFuture(features.get(0));
+                    }
+                });
+    }
+
+    @Override
+    public Future<Boolean> checkFeatureExists(String collectionId, List<String> featureIds) {
+        Promise<Boolean> result = Promise.promise();
+
+        if (featureIds == null || featureIds.isEmpty()) {
+            result.complete(false);
+            return result.future();
+        }
+
+        // Create placeholders for the IN clause
+        String placeholders = featureIds.stream()
+                .map(id -> "$" + (featureIds.indexOf(id) + 2) + "::int")
+                .collect(Collectors.joining(","));
+
+        String sql = "SELECT COUNT(*) as count FROM \"" + collectionId + "\" WHERE id IN (" + placeholders + ")";
+
+        // Create tuple with collection ID and feature IDs
+        Tuple tuple = Tuple.of(UUID.fromString(collectionId));
+        for (String featureId : featureIds) {
+            tuple = tuple.addInteger(Integer.parseInt(featureId));
+        }
+
+        Tuple finalTuple = tuple;
+        client.withConnection(conn ->
+                conn.preparedQuery(sql)
+                        .execute(finalTuple)
+                        .onSuccess(rows -> {
+                            int count = rows.iterator().next().getInteger("count");
+                            boolean allExist = count == featureIds.size();
+                            LOGGER.debug("Feature existence check for collection {}: {} out of {} features exist",
+                                    collectionId, count, featureIds.size());
+                            result.complete(allExist);
+                        })
+                        .onFailure(throwable -> {
+                            LOGGER.error("Error checking feature existence: {}", throwable.getMessage());
+                            result.fail(new OgcException(500, "Internal Server Error", "Error validating feature existence"));
+                        })
+        );
 
         return result.future();
     }
