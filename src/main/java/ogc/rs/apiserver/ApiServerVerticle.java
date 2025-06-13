@@ -392,19 +392,18 @@ public class ApiServerVerticle extends AbstractVerticle {
   }
 
   public void getFeatures(RoutingContext routingContext) {
-
     RequestParameters requestParameters = routingContext.get(ValidationHandler.REQUEST_CONTEXT_KEY);
     String collectionId = routingContext.request().path().split("/")[2];
     AuthInfo user = routingContext.get(USER_KEY);
 
-// Extract query parameters as a mutable map
+    // Extract query parameters as a mutable map
     Map<String, Object> queryParams = requestParameters.toJson().getJsonObject("query").getMap();
     Map<String, String> queryParamsMap = queryParams.entrySet()
             .stream()
             .filter(i -> i.getValue() != null)
             .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().toString()));
 
-// Extract bbox limit from user's token constraints
+    // Extract bbox limit from user's token constraints
     JsonObject limitsJson = user.getConstraints().getJsonObject("limits");
     Limits limits = Limits.fromJson(limitsJson);
     if (limits != null && limits.getBboxLimit() != null) {
@@ -415,105 +414,125 @@ public class ApiServerVerticle extends AbstractVerticle {
       queryParamsMap.put("tokenBbox", tokenBbox);
       LOGGER.debug("<APIServer> Token BBOX injected: {}", tokenBboxList);
     }
+
+    // Extract feat limit from user's token constraints
+    if (limits != null && limits.getFeatLimit() != null && !limits.getFeatLimit().isEmpty()) {
+      Map<String, List<String>> featLimits = limits.getFeatLimit();
+      // Convert feat limits to a format that can be passed to database service
+      // We'll pass the collection ID and feature IDs as query parameters
+      for (Map.Entry<String, List<String>> entry : featLimits.entrySet()) {
+        String tokenCollectionId = entry.getKey();
+        List<String> tokenFeatureIds = entry.getValue();
+
+        // Add token feature limits to query params
+        queryParamsMap.put("tokenFeatCollectionId", tokenCollectionId);
+        queryParamsMap.put("tokenFeatIds", String.join(",", tokenFeatureIds));
+        LOGGER.debug("<APIServer> Token Feature Limits injected - Collection: {}, Features: {}",
+                tokenCollectionId, tokenFeatureIds);
+        break;
+      }
+    }
+
     LOGGER.debug("<APIServer> QP- {}", queryParamsMap);
 
     Future<Map<String, Integer>> isCrsValid = dbService.isCrsValid(collectionId, queryParamsMap);
     isCrsValid
-        .compose(datetimeCheck -> {
-          try {
-            String datetime;
-            ZonedDateTime zone, zone2;
-            DateTimeFormatter formatter = DateTimeFormatter.ISO_ZONED_DATE_TIME;
-            if (queryParamsMap.containsKey("datetime")) {
-              datetime = queryParamsMap.get("datetime");
-              if (!datetime.contains("/")) {
-                zone = ZonedDateTime.parse(datetime, formatter);
-              } else if (datetime.contains("/")) {
-                String[] dateTimeArr = datetime.split("/");
-                if (dateTimeArr[0].equals("..")) { // -- before
-                  zone = ZonedDateTime.parse(dateTimeArr[1], formatter);
-                }
-                else if (dateTimeArr[1].equals("..")) { // -- after
-                  zone = ZonedDateTime.parse(dateTimeArr[0], formatter);
-                }
-                else {
-                  zone = ZonedDateTime.parse(dateTimeArr[0], formatter);
-                  zone2 = ZonedDateTime.parse(dateTimeArr[1], formatter);
-                  if (zone2.isBefore(zone)){
-                    OgcException ogcException = new OgcException(400, "Bad Request", "After time cannot be lesser " +
-                        "than Before time");
-                    return Future.failedFuture(ogcException);
+            .compose(datetimeCheck -> {
+              try {
+                String datetime;
+                ZonedDateTime zone, zone2;
+                DateTimeFormatter formatter = DateTimeFormatter.ISO_ZONED_DATE_TIME;
+                if (queryParamsMap.containsKey("datetime")) {
+                  datetime = queryParamsMap.get("datetime");
+                  if (!datetime.contains("/")) {
+                    zone = ZonedDateTime.parse(datetime, formatter);
+                  } else if (datetime.contains("/")) {
+                    String[] dateTimeArr = datetime.split("/");
+                    if (dateTimeArr[0].equals("..")) { // -- before
+                      zone = ZonedDateTime.parse(dateTimeArr[1], formatter);
+                    }
+                    else if (dateTimeArr[1].equals("..")) { // -- after
+                      zone = ZonedDateTime.parse(dateTimeArr[0], formatter);
+                    }
+                    else {
+                      zone = ZonedDateTime.parse(dateTimeArr[0], formatter);
+                      zone2 = ZonedDateTime.parse(dateTimeArr[1], formatter);
+                      if (zone2.isBefore(zone)){
+                        OgcException ogcException = new OgcException(400, "Bad Request", "After time cannot be lesser " +
+                                "than Before time");
+                        return Future.failedFuture(ogcException);
+                      }
+                    }
                   }
                 }
-              }
-            }
-          } catch (NullPointerException ne) {
+              } catch (NullPointerException ne) {
                 OgcException ogcException =
-                    new OgcException(500, "Internal Server Error", "Internal Server Error");
+                        new OgcException(500, "Internal Server Error", "Internal Server Error");
                 return Future.failedFuture(ogcException);
-            } catch (DateTimeParseException dtpe) {
-              OgcException ogcException =
-                  new OgcException(400, "Bad Request", "Time parameter not in ISO format");
-              return Future.failedFuture(ogcException);
-            }
-            return Future.succeededFuture();
-          })
-        .compose(dbCall -> dbService.getFeatures(collectionId, queryParamsMap, isCrsValid.result()))
-        .onSuccess(success -> {
-          success.put("links", new JsonArray());
-          int limit = Integer.parseInt(queryParamsMap.get("limit"));
-          String nextLink = "";
-          JsonArray features = success.getJsonArray("features");
-          if (!features.isEmpty()) {
-            int lastIdOffset = features.getJsonObject(features.size() - 1).getInteger("id") + 1;
-            queryParamsMap.put("offset", String.valueOf(lastIdOffset));
-            AtomicReference<String> requestPath = new AtomicReference<>(routingContext.request().path());
-            if (!queryParamsMap.isEmpty()) {
-              requestPath.set(requestPath + "?");
-              queryParamsMap.forEach((key, value) -> requestPath.set(requestPath + key + "=" + value + "&"));
-            }
-            nextLink = requestPath.toString().substring(0, requestPath.toString().length() - 1);
-            nextLink = nextLink.replace("[", "").replace("]","");
-            LOGGER.debug("**** nextLink- {}", nextLink);
-            if ( limit < success.getInteger("numberMatched")
-                && (success.getInteger("numberMatched") > success.getInteger("numberReturned"))
-                && success.getInteger("numberReturned") != 0 ) {
+              } catch (DateTimeParseException dtpe) {
+                OgcException ogcException =
+                        new OgcException(400, "Bad Request", "Time parameter not in ISO format");
+                return Future.failedFuture(ogcException);
+              }
+              return Future.succeededFuture();
+            })
+            .compose(dbCall -> dbService.getFeatures(collectionId, queryParamsMap, isCrsValid.result()))
+            .onSuccess(success -> {
+              success.put("links", new JsonArray());
+              int limit = Integer.parseInt(queryParamsMap.get("limit"));
+              String nextLink = "";
+              JsonArray features = success.getJsonArray("features");
+              if (!features.isEmpty()) {
+                int lastIdOffset = features.getJsonObject(features.size() - 1).getInteger("id") + 1;
+                queryParamsMap.put("offset", String.valueOf(lastIdOffset));
+                AtomicReference<String> requestPath = new AtomicReference<>(routingContext.request().path());
+                if (!queryParamsMap.isEmpty()) {
+                  requestPath.set(requestPath + "?");
+                  queryParamsMap.forEach((key, value) -> requestPath.set(requestPath + key + "=" + value + "&"));
+                }
+                nextLink = requestPath.toString().substring(0, requestPath.toString().length() - 1);
+                nextLink = nextLink.replace("[", "").replace("]","");
+                LOGGER.debug("**** nextLink- {}", nextLink);
+                if ( limit < success.getInteger("numberMatched")
+                        && (success.getInteger("numberMatched") > success.getInteger("numberReturned"))
+                        && success.getInteger("numberReturned") != 0 ) {
+                  success.getJsonArray("links")
+                          .add(new JsonObject()
+                                  .put("href",
+                                          hostName + nextLink)
+                                  .put("rel", "next")
+                                  .put("type", "application/geo+json" ));
+                }
+              }
               success.getJsonArray("links")
-                  .add(new JsonObject()
-                      .put("href",
-                          hostName + nextLink)
-                      .put("rel", "next")
-                      .put("type", "application/geo+json" ));
-            }
-          }
-          success.getJsonArray("links")
-                  .add(new JsonObject()
-                      .put("href", hostName + ogcBasePath + COLLECTIONS + "/" + collectionId + "/items")
-                      .put("rel", "self")
-                      .put("type", "application/geo+json"))
-                  .add(new JsonObject()
-                      .put("href", hostName + ogcBasePath  + COLLECTIONS + "/" + collectionId + "/items")
-                      .put("rel", "alternate")
-                      .put("type", "application/geo+json"));
-          success.put("timeStamp", Instant.now().toString());
-          routingContext.put("response",success.toString());
-          routingContext.put("statusCode", 200);
-          routingContext.put("crs", "<" + queryParamsMap.getOrDefault("crs", DEFAULT_SERVER_CRS) + ">");
-          routingContext.next();
-        })
-        .onFailure(failed -> {
-          if (failed instanceof OgcException){
-            routingContext.put("response",((OgcException) failed).getJson().toString());
-            routingContext.put("statusCode", ((OgcException) failed).getStatusCode());
-          }
-          else{
-            OgcException ogcException = new OgcException(500, "Internal Server Error", "Internal Server Error");
-            routingContext.put("response", ogcException.getJson().toString());
-            routingContext.put("statusCode", ogcException.getStatusCode());
-          }
-          routingContext.next();
-        });
+                      .add(new JsonObject()
+                              .put("href", hostName + ogcBasePath + COLLECTIONS + "/" + collectionId + "/items")
+                              .put("rel", "self")
+                              .put("type", "application/geo+json"))
+                      .add(new JsonObject()
+                              .put("href", hostName + ogcBasePath  + COLLECTIONS + "/" + collectionId + "/items")
+                              .put("rel", "alternate")
+                              .put("type", "application/geo+json"));
+              success.put("timeStamp", Instant.now().toString());
+              routingContext.put("response",success.toString());
+              routingContext.put("statusCode", 200);
+              routingContext.put("crs", "<" + queryParamsMap.getOrDefault("crs", DEFAULT_SERVER_CRS) + ">");
+              routingContext.next();
+            })
+            .onFailure(failed -> {
+              if (failed instanceof OgcException){
+                routingContext.put("response",((OgcException) failed).getJson().toString());
+                routingContext.put("statusCode", ((OgcException) failed).getStatusCode());
+              }
+              else{
+                OgcException ogcException = new OgcException(500, "Internal Server Error", "Internal Server Error");
+                routingContext.put("response", ogcException.getJson().toString());
+                routingContext.put("statusCode", ogcException.getStatusCode());
+              }
+              routingContext.next();
+            });
   }
+
 
   public void getProcesses(RoutingContext routingContext) {
     RequestParameters paramsFromOasValidation = routingContext.get(ValidationHandler.REQUEST_CONTEXT_KEY);
