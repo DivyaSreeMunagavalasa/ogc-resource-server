@@ -137,32 +137,33 @@ public class FeatureQueryBuilder {
     // st_asgeojson(geometry, maxdecimaldigits, options); options = 0 means no extra options
     geoColumn = "cast(st_asgeojson(st_transform(geom," + crs + "), 9,0) as json)";
   }
+
   public void setDatetime(String datetime) {
     if (datetimeKey.isEmpty()) {
       return;
     }
     this.additionalParams = "where";
-    
+
     String datetimeFormat = "'yyyy-mm-dd\"T\"HH24:MI:SS\"Z\"'";
-    
+
     // to_timestamp(datetimeKey, 'datetimeFormat') 'operator' 'datetime' (from request);
     String concatString =
-        " to_timestamp(" .concat(datetimeKey).concat(",").concat(datetimeFormat).concat(") ");
-    
+            " to_timestamp(" .concat(datetimeKey).concat(",").concat(datetimeFormat).concat(") ");
+
     if (!datetime.contains("/")) {
       this.datetime = concatString.concat("= '").concat(datetime).concat("'");
       return;
     }
     String[] dateTimeArr = datetime.split("/");
-      if (dateTimeArr[0].equals("..")) { // -- before
+    if (dateTimeArr[0].equals("..")) { // -- before
       this.datetime = concatString.concat("<'").concat(dateTimeArr[1]).concat("'");
-  }
+    }
     else if (dateTimeArr[1].equals("..")) { // -- after
       this.datetime = concatString.concat(">'").concat(dateTimeArr[0]).concat("'");
     }
     else {
       this.datetime = concatString.concat(" between '").concat(dateTimeArr[0]).concat("' and '")
-          .concat(dateTimeArr[1]).concat("'");
+              .concat(dateTimeArr[1]).concat("'");
     }
   }
 
@@ -178,7 +179,7 @@ public class FeatureQueryBuilder {
     // add double-quotes around the key. Double-quotes are needed as the column can have hypens or
     // caps in it. The STAC datetime key is a JSONB expression, so no double-quotes are required.
     if (STAC_ITEMS_DATETIME_KEY.equals(datetimeKey)) {
-      this.datetimeKey = datetimeKey; 
+      this.datetimeKey = datetimeKey;
     }
     else {
       this.datetimeKey = "\"" + datetimeKey + "\"";
@@ -189,21 +190,11 @@ public class FeatureQueryBuilder {
     this.tokenFeatCollectionId = tokenCollectionId;
     this.tokenFeatIds = tokenFeatureIds;
 
-    // Build the feature limits condition using ST_Intersects with geometries from token collection
+    // Build the feature limits condition using JOIN with individual geometries from token collection
     String[] featureIds = tokenFeatureIds.split(",");
     StringBuilder featCondition = new StringBuilder();
 
-    featCondition.append("ST_Intersects(geom, (")
-            .append("SELECT ST_Union(geom) FROM \"")
-            .append(tokenCollectionId)
-            .append("\" WHERE id IN (");
-
-    for (int i = 0; i < featureIds.length; i++) {
-      if (i > 0) featCondition.append(",");
-      featCondition.append(featureIds[i]);
-    }
-
-    featCondition.append(")))");
+    featCondition.append("ST_Intersects(request_feature.geom, token_feature.geom)");
 
     this.featLimits = featCondition.toString();
     this.additionalParams = "where";
@@ -214,7 +205,7 @@ public class FeatureQueryBuilder {
   public void setStacItemIds(String[] itemIds) {
     this.stacItemIds = itemIds;
   }
-  
+
   public void setStacCollectionIds(String[] collectionIds) {
     this.stacCollectionIds = collectionIds;
   }
@@ -222,108 +213,135 @@ public class FeatureQueryBuilder {
   public void setStacIntersectsGeom(JsonObject geometry) {
     // this is a geojson geometry
     this.stacIntersectsGeom =
-        "st_intersects(geom, st_geomfromgeojson('" + geometry.toString() + "'))";
+            "st_intersects(geom, st_geomfromgeojson('" + geometry.toString() + "'))";
+  }
+
+  private String buildJoinQuery() {
+    // Build the JOIN query for feature limits
+    String geoColumnForJoin = geoColumn.replace("geom", "request_feature.geom");
+
+    StringBuilder query = new StringBuilder();
+    query.append("SELECT request_feature.id, 'Feature' AS type, ")
+            .append(geoColumnForJoin)
+            .append(" AS geometry, (row_to_json(request_feature)::jsonb - 'id' - 'geom') AS properties ")
+            .append("FROM \"").append(tableName).append("\" request_feature ")
+            .append("JOIN \"").append(tokenFeatCollectionId).append("\" token_feature ")
+            .append("ON ST_Intersects(request_feature.geom, token_feature.geom) ");
+
+    // Build WHERE conditions
+    StringBuilder whereConditions = new StringBuilder();
+    // Add token feature ID filter
+    whereConditions.append("token_feature.id IN (").append(tokenFeatIds).append(")");
+
+    // Add other conditions with request_feature prefix
+    if (!bbox.isEmpty()) {
+      whereConditions.append(" AND ").append(bbox.replace("geom", "request_feature.geom"));
+    }
+
+    if (!datetime.isEmpty()) {
+      whereConditions.append(" AND ").append(datetime.replace(datetimeKey, "request_feature." + datetimeKey));
+    }
+
+    if (!filter.isEmpty()) {
+      whereConditions.append(" AND ").append(filter.replace("\"", "request_feature.\""));
+    }
+
+    // Add offset condition
+    if (offset > 0) {
+      whereConditions.append(" AND request_feature.id > ").append(offset);
+    }
+
+    query.append("WHERE ").append(whereConditions.toString());
+    query.append(" ORDER BY request_feature.id LIMIT ").append(limit);
+
+    return query.toString();
+  }
+
+  private String buildJoinCountQuery() {
+    // Build the JOIN count query for feature limits
+    StringBuilder query = new StringBuilder();
+    query.append("SELECT COUNT(request_feature.id) ")
+            .append("FROM \"").append(tableName).append("\" request_feature ")
+            .append("JOIN \"").append(tokenFeatCollectionId).append("\" token_feature ")
+            .append("ON ST_Intersects(request_feature.geom, token_feature.geom) ");
+
+    // Build WHERE conditions
+    StringBuilder whereConditions = new StringBuilder();
+
+    // Add token feature ID filter
+    whereConditions.append("token_feature.id IN (").append(tokenFeatIds).append(")");
+
+    // Add other conditions with request_feature prefix
+    if (!bbox.isEmpty()) {
+      whereConditions.append(" AND ").append(bbox.replace("geom", "request_feature.geom"));
+    }
+
+    if (!datetime.isEmpty()) {
+      whereConditions.append(" AND ").append(datetime.replace(datetimeKey, "request_feature." + datetimeKey));
+    }
+
+    if (!filter.isEmpty()) {
+      whereConditions.append(" AND ").append(filter.replace("\"", "request_feature.\""));
+    }
+
+    query.append("WHERE ").append(whereConditions.toString());
+
+    return query.toString();
   }
 
   public String buildSqlString() {
+    // Check if we need to use JOIN approach (only when featLimits is present)
+    if (!featLimits.isEmpty()) {
+      return buildJoinQuery();
+    }
+
+    // Original query building logic for non-feature-limit cases
     //TODO: refactor to build the sql query
     this.sqlString = String.format("select id, 'Feature' as type, %4$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
-            " 'id' - 'geom') as properties from \"%1$s\" where id > %3$d ORDER BY id limit %2$d"
-        , this.tableName, this.limit, this.offset, this.geoColumn);
+                    " 'id' - 'geom') as properties from \"%1$s\" where id > %3$d ORDER BY id limit %2$d"
+            , this.tableName, this.limit, this.offset, this.geoColumn);
 
     if (!bbox.isEmpty()) {
       this.sqlString = String.format("select id, 'Feature' as type, %6$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
-              " 'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and id > %5$d ORDER BY id limit %2$d"
-          ,this.tableName,this.limit, this.additionalParams, this.bbox, this.offset, this.geoColumn);
+                      " 'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and id > %5$d ORDER BY id limit %2$d"
+              ,this.tableName,this.limit, this.additionalParams, this.bbox, this.offset, this.geoColumn);
     }
 
     if(!datetime.isEmpty() ){
       this.sqlString = String.format("select id, 'Feature' as type, %6$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
-              "'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and id > %5$d ORDER BY id limit %2$d"
-          ,this.tableName,this.limit, this.additionalParams, this.datetime, this.offset, this.geoColumn);
+                      "'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and id > %5$d ORDER BY id limit %2$d"
+              ,this.tableName,this.limit, this.additionalParams, this.datetime, this.offset, this.geoColumn);
     }
 
     if (!filter.isEmpty()) {
       this.sqlString = String.format("select id, 'Feature' as type, %6$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
-              " 'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and id > %5$d ORDER BY id limit %2$d"
-          ,this.tableName,this.limit, this.additionalParams, this.filter, this.offset, this.geoColumn);
-    }
-    // Add feature limits handling
-    if (!featLimits.isEmpty()) {
-      LOGGER.debug("the feature limit in the build sql query method is: {}", this.featLimits);
-      this.sqlString = String.format("select id, 'Feature' as type, %6$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
                       " 'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and id > %5$d ORDER BY id limit %2$d"
-              ,this.tableName,this.limit, this.additionalParams, this.featLimits, this.offset, this.geoColumn);
+              ,this.tableName,this.limit, this.additionalParams, this.filter, this.offset, this.geoColumn);
     }
 
     if (!bbox.isEmpty() && !filter.isEmpty()) {
       this.sqlString = String.format("select id, 'Feature' as type, %7$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
-              "'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and %5$s and id > %6$d ORDER BY id limit %2$d"
-          ,this.tableName,this.limit, this.additionalParams, this.bbox, this.filter, this.offset, this.geoColumn);
+                      "'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and %5$s and id > %6$d ORDER BY id limit %2$d"
+              ,this.tableName,this.limit, this.additionalParams, this.bbox, this.filter, this.offset, this.geoColumn);
     }
 
     if (!bbox.isEmpty() && !datetime.isEmpty()) {
       this.sqlString = String.format("select id, 'Feature' as type, %7$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
-              " 'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and %5$s and %6$d ORDER BY id limit %2$d"
-          ,this.tableName,this.limit, this.additionalParams, this.bbox, this.datetime, this.offset, this.geoColumn);
+                      " 'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and %5$s and %6$d ORDER BY id limit %2$d"
+              ,this.tableName,this.limit, this.additionalParams, this.bbox, this.datetime, this.offset, this.geoColumn);
     }
 
     if (!datetime.isEmpty() && !filter.isEmpty()) {
       this.sqlString = String.format("select id, 'Feature' as type, %7$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
-              " 'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and %5$s and id > %6$d ORDER BY id limit %2$d"
-          ,this.tableName,this.limit, this.additionalParams, this.datetime, this.filter, this.offset, this.geoColumn);
-    }
-
-    // Handle combinations with feature limits
-    if (!bbox.isEmpty() && !featLimits.isEmpty()) {
-      this.sqlString = String.format("select id, 'Feature' as type, %7$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
-                      "'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and %5$s and id > %6$d ORDER BY id limit %2$d"
-              ,this.tableName,this.limit, this.additionalParams, this.bbox, this.featLimits, this.offset, this.geoColumn);
-    }
-
-    if (!datetime.isEmpty() && !featLimits.isEmpty()) {
-      this.sqlString = String.format("select id, 'Feature' as type, %7$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
                       " 'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and %5$s and id > %6$d ORDER BY id limit %2$d"
-              ,this.tableName,this.limit, this.additionalParams, this.datetime, this.featLimits, this.offset, this.geoColumn);
-    }
-
-    if (!filter.isEmpty() && !featLimits.isEmpty()) {
-      this.sqlString = String.format("select id, 'Feature' as type, %7$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
-                      " 'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and %5$s and id > %6$d ORDER BY id limit %2$d"
-              ,this.tableName,this.limit, this.additionalParams, this.filter, this.featLimits, this.offset, this.geoColumn);
+              ,this.tableName,this.limit, this.additionalParams, this.datetime, this.filter, this.offset, this.geoColumn);
     }
 
     if (!bbox.isEmpty() && !filter.isEmpty() && !datetime.isEmpty()) {
       this.sqlString = String.format("select id, 'Feature' as type, %8$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
-              " 'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and %5$s and %7$s and id > %6$d ORDER BY id limit %2$d"
-          ,this.tableName,this.limit, this.additionalParams, this.bbox, this.filter, this.offset, this.datetime,
-          this.geoColumn);
-    }
-
-    // Handle all three conditions together
-    if (!bbox.isEmpty() && !datetime.isEmpty() && !featLimits.isEmpty()) {
-      this.sqlString = String.format("select id, 'Feature' as type, %8$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
                       " 'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and %5$s and %7$s and id > %6$d ORDER BY id limit %2$d"
-              ,this.tableName,this.limit, this.additionalParams, this.bbox, this.featLimits, this.offset, this.datetime, this.geoColumn);
-    }
-
-    if (!filter.isEmpty() && !datetime.isEmpty() && !featLimits.isEmpty()) {
-      this.sqlString = String.format("select id, 'Feature' as type, %8$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
-                      " 'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and %5$s and %7$s and id > %6$d ORDER BY id limit %2$d"
-              ,this.tableName,this.limit, this.additionalParams, this.datetime, this.filter, this.featLimits, this.offset, this.geoColumn);
-    }
-
-    if (!bbox.isEmpty() && !filter.isEmpty() && !featLimits.isEmpty()) {
-      this.sqlString = String.format("select id, 'Feature' as type, %8$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
-                      " 'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and %5$s and %7$s and id > %6$d ORDER BY id limit %2$d"
-              ,this.tableName,this.limit, this.additionalParams, this.bbox, this.filter, this.featLimits, this.offset, this.geoColumn);
-    }
-
-    // Handle all four conditions together
-    if (!bbox.isEmpty() && !filter.isEmpty() && !datetime.isEmpty() && !featLimits.isEmpty()) {
-      this.sqlString = String.format("select id, 'Feature' as type, %9$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
-                      " 'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and %5$s and %6$s and %8$s and id > %7$d ORDER BY id limit %2$d"
-              ,this.tableName,this.limit, this.additionalParams, this.bbox, this.filter, this.featLimits, this.offset, this.datetime, this.geoColumn);
+              ,this.tableName,this.limit, this.additionalParams, this.bbox, this.filter, this.offset, this.datetime,
+              this.geoColumn);
     }
 
     LOGGER.debug("<builder>Sql query- {}", sqlString);
@@ -331,6 +349,12 @@ public class FeatureQueryBuilder {
   }
 
   public String buildSqlString(String isCountQuery) {
+    // Check if we need to use JOIN approach (only when featLimits is present)
+    if (!featLimits.isEmpty()) {
+      return buildJoinCountQuery();
+    }
+
+    // Original count query building logic for non-feature-limit cases
     this.sqlString = String.format("select count(id) from \"%1$s\" "
             , this.tableName);
 
@@ -349,11 +373,6 @@ public class FeatureQueryBuilder {
               ,this.tableName, this.additionalParams, this.filter);
     }
 
-    if (!featLimits.isEmpty()) {
-      this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s"
-              ,this.tableName, this.additionalParams, this.featLimits);
-    }
-
     // Handle combinations
     if (!bbox.isEmpty() && !filter.isEmpty()) {
       this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s and %4$s"
@@ -365,24 +384,9 @@ public class FeatureQueryBuilder {
               ,this.tableName, this.additionalParams, this.bbox, this.datetime);
     }
 
-    if (!bbox.isEmpty() && !featLimits.isEmpty()) {
-      this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s and %4$s"
-              ,this.tableName, this.additionalParams, this.bbox, this.featLimits);
-    }
-
     if (!datetime.isEmpty() && !filter.isEmpty()) {
       this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s and %4$s"
               ,this.tableName, this.additionalParams, this.datetime, this.filter);
-    }
-
-    if (!datetime.isEmpty() && !featLimits.isEmpty()) {
-      this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s and %4$s"
-              ,this.tableName, this.additionalParams, this.datetime, this.featLimits);
-    }
-
-    if (!filter.isEmpty() && !featLimits.isEmpty()) {
-      this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s and %4$s"
-              ,this.tableName, this.additionalParams, this.filter, this.featLimits);
     }
 
     // Handle three conditions
@@ -391,40 +395,19 @@ public class FeatureQueryBuilder {
               ,this.tableName, this.additionalParams, this.bbox, this.filter, this.datetime);
     }
 
-    if (!bbox.isEmpty() && !filter.isEmpty() && !featLimits.isEmpty()) {
-      this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s and %4$s and %5$s"
-              ,this.tableName, this.additionalParams, this.bbox, this.filter, this.featLimits);
-    }
-
-    if (!bbox.isEmpty() && !datetime.isEmpty() && !featLimits.isEmpty()) {
-      this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s and %4$s and %5$s"
-              ,this.tableName, this.additionalParams, this.bbox, this.datetime, this.featLimits);
-    }
-
-    if (!datetime.isEmpty() && !filter.isEmpty() && !featLimits.isEmpty()) {
-      this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s and %4$s and %5$s"
-              ,this.tableName, this.additionalParams, this.datetime, this.filter, this.featLimits);
-    }
-
-    // Handle all four conditions
-    if (!bbox.isEmpty() && !filter.isEmpty() && !datetime.isEmpty() && !featLimits.isEmpty()) {
-      this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s and %4$s and %5$s and %6$s"
-              ,this.tableName, this.additionalParams, this.bbox, this.filter, this.datetime, this.featLimits);
-    }
-
     LOGGER.debug("<builder>Count query- {}", sqlString);
     return sqlString;
   }
-  
+
   /**
    * Build query string needed for STAC Item Search. An empty {@link Tuple} is passed in as a
    * parameter. Query params are added to tuple when a safe-query string formed by appending cannot
    * be created. The returned query must be executed with the tuple.
-   * 
+   *
    * STAC Item Search uses PostgreSQL table partitioning. A partitioned table called
    * <em>stac_collections_part</em> is queried instead of querying individual STAC collection
    * tables.
-   * 
+   *
    * @param tup empty tuple to which query params can be added
    * @return the formed query which must be run with the passed-in tuple
    */
@@ -433,8 +416,8 @@ public class FeatureQueryBuilder {
     StringBuilder stacPartitionTableQuery = new StringBuilder();
 
     stacPartitionTableQuery.append(
-        "SELECT scp.id AS id, 'Feature' AS type, collection_id AS collection, " + this.geoColumn
-            + " AS geometry, properties, p_id FROM stac_collections_part scp WHERE 1=1");
+            "SELECT scp.id AS id, 'Feature' AS type, collection_id AS collection, " + this.geoColumn
+                    + " AS geometry, properties, p_id FROM stac_collections_part scp WHERE 1=1");
 
     // integer that stores the parameter index as params are added to the tuple
     int parameterIndex = 0;
@@ -455,7 +438,7 @@ public class FeatureQueryBuilder {
     if (stacCollectionIds.length != 0) {
       parameterIndex++;
       stacPartitionTableQuery
-          .append(" AND collection_id::text = ANY($" + parameterIndex + ")");
+              .append(" AND collection_id::text = ANY($" + parameterIndex + ")");
       tup.addArrayOfString(stacCollectionIds);
     }
 
@@ -470,27 +453,25 @@ public class FeatureQueryBuilder {
     if (offset != 0) {
       stacPartitionTableQuery.append(" AND p_id > ").append(offset);
     }
-    
+
     // limit always added
     stacPartitionTableQuery.append(" LIMIT ").append(this.limit);
 
     // forming CTE with the stac_collections_part query to get required data from stac_items_assets
     // and then joining the result
     StringBuilder finalCteQuery = new StringBuilder().append("WITH items AS (")
-        .append(stacPartitionTableQuery.toString())
-        .append("), assets AS (SELECT collection_id, item_id,"
-            + " jsonb_agg((row_to_json(stac_items_assets.*)::jsonb - 'item_id'))"
-            + " AS assetobjects FROM stac_items_assets"
-            + " JOIN items ON item_id = items.id AND collection_id = items.collection"
-            + " GROUP BY collection_id, item_id)"
-            + " SELECT items.*, assets.assetobjects FROM assets"
-            + " JOIN items ON items.collection = assets.collection_id AND assets.item_id = items.id"
-            + " ORDER BY items.p_id");
+            .append(stacPartitionTableQuery.toString())
+            .append("), assets AS (SELECT collection_id, item_id,"
+                    + " jsonb_agg((row_to_json(stac_items_assets.*)::jsonb - 'item_id'))"
+                    + " AS assetobjects FROM stac_items_assets"
+                    + " JOIN items ON item_id = items.id AND collection_id = items.collection"
+                    + " GROUP BY collection_id, item_id)"
+                    + " SELECT items.*, assets.assetobjects FROM assets"
+                    + " JOIN items ON items.collection = assets.collection_id AND assets.item_id = items.id"
+                    + " ORDER BY items.p_id");
 
     LOGGER.debug("<builder> Item Search SQL query - {}", finalCteQuery.toString());
 
     return finalCteQuery.toString();
   }
-
-
 }
