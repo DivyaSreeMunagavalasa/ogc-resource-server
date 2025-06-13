@@ -196,8 +196,25 @@ public class DatabaseServiceImpl implements DatabaseService{
             }
         });
 
-        // Continue only after bboxFuture completes
-        return bboxFuture.compose(v -> sridOfStorageCrs.compose(srid ->
+        // Add feature limits handling
+        Future<Void> featLimitsFuture = bboxFuture.compose(v -> {
+            String tokenFeatCollectionId = queryParams.get("tokenFeatCollectionId");
+            String tokenFeatIds = queryParams.get("tokenFeatIds");
+
+            if (tokenFeatCollectionId != null && tokenFeatIds != null) {
+                LOGGER.debug("Processing feature limits - Token Collection: {}, Token Feature IDs: {}",
+                        tokenFeatCollectionId, tokenFeatIds);
+
+                // Set feature limits in the query builder
+                featureQuery.setFeatLimits(tokenFeatCollectionId, tokenFeatIds);
+                return Future.succeededFuture();
+            } else {
+                return Future.succeededFuture();
+            }
+        });
+
+        // Continue only after both bboxFuture and featLimitsFuture complete
+        return featLimitsFuture.compose(v -> sridOfStorageCrs.compose(srid ->
                         client.withConnection(conn ->
                                 conn.preparedQuery("select datetime_key from collections_details where id = $1::uuid")
                                         .collecting(collector)

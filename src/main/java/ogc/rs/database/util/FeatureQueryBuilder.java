@@ -14,6 +14,9 @@ public class FeatureQueryBuilder {
   private String[] stacCollectionIds = {};
   private int limit;
   private String bbox;
+  private String featLimits;
+  private String tokenFeatCollectionId;
+  private String tokenFeatIds;
   private String datetime;
   private String filter;
   private String additionalParams;
@@ -33,6 +36,9 @@ public class FeatureQueryBuilder {
     bbox = "";
     datetime = "";
     filter = "";
+    featLimits = "";
+    tokenFeatCollectionId = "";
+    tokenFeatIds = "";
     additionalParams = "";
     sqlString = "";
     datetimeKey = "";
@@ -179,6 +185,32 @@ public class FeatureQueryBuilder {
     }
   }
 
+  public void setFeatLimits(String tokenCollectionId, String tokenFeatureIds) {
+    this.tokenFeatCollectionId = tokenCollectionId;
+    this.tokenFeatIds = tokenFeatureIds;
+
+    // Build the feature limits condition using ST_Intersects with geometries from token collection
+    String[] featureIds = tokenFeatureIds.split(",");
+    StringBuilder featCondition = new StringBuilder();
+
+    featCondition.append("ST_Intersects(geom, (")
+            .append("SELECT ST_Union(geom) FROM \"")
+            .append(tokenCollectionId)
+            .append("\" WHERE id IN (");
+
+    for (int i = 0; i < featureIds.length; i++) {
+      if (i > 0) featCondition.append(",");
+      featCondition.append(featureIds[i]);
+    }
+
+    featCondition.append(")))");
+
+    this.featLimits = featCondition.toString();
+    this.additionalParams = "where";
+
+    LOGGER.debug("Feature limits condition: {}", this.featLimits);
+  }
+
   public void setStacItemIds(String[] itemIds) {
     this.stacItemIds = itemIds;
   }
@@ -216,6 +248,13 @@ public class FeatureQueryBuilder {
               " 'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and id > %5$d ORDER BY id limit %2$d"
           ,this.tableName,this.limit, this.additionalParams, this.filter, this.offset, this.geoColumn);
     }
+    // Add feature limits handling
+    if (!featLimits.isEmpty()) {
+      LOGGER.debug("the feature limit in the build sql query method is: {}", this.featLimits);
+      this.sqlString = String.format("select id, 'Feature' as type, %6$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
+                      " 'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and id > %5$d ORDER BY id limit %2$d"
+              ,this.tableName,this.limit, this.additionalParams, this.featLimits, this.offset, this.geoColumn);
+    }
 
     if (!bbox.isEmpty() && !filter.isEmpty()) {
       this.sqlString = String.format("select id, 'Feature' as type, %7$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
@@ -235,54 +274,144 @@ public class FeatureQueryBuilder {
           ,this.tableName,this.limit, this.additionalParams, this.datetime, this.filter, this.offset, this.geoColumn);
     }
 
+    // Handle combinations with feature limits
+    if (!bbox.isEmpty() && !featLimits.isEmpty()) {
+      this.sqlString = String.format("select id, 'Feature' as type, %7$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
+                      "'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and %5$s and id > %6$d ORDER BY id limit %2$d"
+              ,this.tableName,this.limit, this.additionalParams, this.bbox, this.featLimits, this.offset, this.geoColumn);
+    }
+
+    if (!datetime.isEmpty() && !featLimits.isEmpty()) {
+      this.sqlString = String.format("select id, 'Feature' as type, %7$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
+                      " 'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and %5$s and id > %6$d ORDER BY id limit %2$d"
+              ,this.tableName,this.limit, this.additionalParams, this.datetime, this.featLimits, this.offset, this.geoColumn);
+    }
+
+    if (!filter.isEmpty() && !featLimits.isEmpty()) {
+      this.sqlString = String.format("select id, 'Feature' as type, %7$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
+                      " 'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and %5$s and id > %6$d ORDER BY id limit %2$d"
+              ,this.tableName,this.limit, this.additionalParams, this.filter, this.featLimits, this.offset, this.geoColumn);
+    }
+
     if (!bbox.isEmpty() && !filter.isEmpty() && !datetime.isEmpty()) {
       this.sqlString = String.format("select id, 'Feature' as type, %8$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
               " 'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and %5$s and %7$s and id > %6$d ORDER BY id limit %2$d"
           ,this.tableName,this.limit, this.additionalParams, this.bbox, this.filter, this.offset, this.datetime,
           this.geoColumn);
     }
+
+    // Handle all three conditions together
+    if (!bbox.isEmpty() && !datetime.isEmpty() && !featLimits.isEmpty()) {
+      this.sqlString = String.format("select id, 'Feature' as type, %8$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
+                      " 'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and %5$s and %7$s and id > %6$d ORDER BY id limit %2$d"
+              ,this.tableName,this.limit, this.additionalParams, this.bbox, this.featLimits, this.offset, this.datetime, this.geoColumn);
+    }
+
+    if (!filter.isEmpty() && !datetime.isEmpty() && !featLimits.isEmpty()) {
+      this.sqlString = String.format("select id, 'Feature' as type, %8$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
+                      " 'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and %5$s and %7$s and id > %6$d ORDER BY id limit %2$d"
+              ,this.tableName,this.limit, this.additionalParams, this.datetime, this.filter, this.featLimits, this.offset, this.geoColumn);
+    }
+
+    if (!bbox.isEmpty() && !filter.isEmpty() && !featLimits.isEmpty()) {
+      this.sqlString = String.format("select id, 'Feature' as type, %8$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
+                      " 'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and %5$s and %7$s and id > %6$d ORDER BY id limit %2$d"
+              ,this.tableName,this.limit, this.additionalParams, this.bbox, this.filter, this.featLimits, this.offset, this.geoColumn);
+    }
+
+    // Handle all four conditions together
+    if (!bbox.isEmpty() && !filter.isEmpty() && !datetime.isEmpty() && !featLimits.isEmpty()) {
+      this.sqlString = String.format("select id, 'Feature' as type, %9$s as geometry, (row_to_json(\"%1$s\")::jsonb - " +
+                      " 'id' - 'geom') as properties from \"%1$s\" %3$s %4$s and %5$s and %6$s and %8$s and id > %7$d ORDER BY id limit %2$d"
+              ,this.tableName,this.limit, this.additionalParams, this.bbox, this.filter, this.featLimits, this.offset, this.datetime, this.geoColumn);
+    }
+
     LOGGER.debug("<builder>Sql query- {}", sqlString);
     return sqlString;
   }
 
   public String buildSqlString(String isCountQuery) {
-
     this.sqlString = String.format("select count(id) from \"%1$s\" "
-        , this.tableName);
+            , this.tableName);
 
     if (!bbox.isEmpty()) {
-    this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s"
-        ,this.tableName, this.additionalParams, this.bbox);
+      this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s"
+              ,this.tableName, this.additionalParams, this.bbox);
     }
+
     if(!datetime.isEmpty() ){
       this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s"
-          ,this.tableName, this.additionalParams, this.datetime);
+              ,this.tableName, this.additionalParams, this.datetime);
     }
 
     if (!filter.isEmpty()) {
       this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s"
-          ,this.tableName, this.additionalParams, this.filter);
+              ,this.tableName, this.additionalParams, this.filter);
     }
 
+    if (!featLimits.isEmpty()) {
+      this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s"
+              ,this.tableName, this.additionalParams, this.featLimits);
+    }
+
+    // Handle combinations
     if (!bbox.isEmpty() && !filter.isEmpty()) {
       this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s and %4$s"
-          ,this.tableName, this.additionalParams, this.bbox, this.filter);
+              ,this.tableName, this.additionalParams, this.bbox, this.filter);
     }
 
     if (!bbox.isEmpty() && !datetime.isEmpty()) {
       this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s and %4$s"
-          ,this.tableName, this.additionalParams, this.bbox, this.datetime);
+              ,this.tableName, this.additionalParams, this.bbox, this.datetime);
+    }
+
+    if (!bbox.isEmpty() && !featLimits.isEmpty()) {
+      this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s and %4$s"
+              ,this.tableName, this.additionalParams, this.bbox, this.featLimits);
     }
 
     if (!datetime.isEmpty() && !filter.isEmpty()) {
       this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s and %4$s"
-          ,this.tableName, this.additionalParams, this.datetime, this.filter);
+              ,this.tableName, this.additionalParams, this.datetime, this.filter);
     }
 
+    if (!datetime.isEmpty() && !featLimits.isEmpty()) {
+      this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s and %4$s"
+              ,this.tableName, this.additionalParams, this.datetime, this.featLimits);
+    }
+
+    if (!filter.isEmpty() && !featLimits.isEmpty()) {
+      this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s and %4$s"
+              ,this.tableName, this.additionalParams, this.filter, this.featLimits);
+    }
+
+    // Handle three conditions
     if (!bbox.isEmpty() && !filter.isEmpty() && !datetime.isEmpty()) {
       this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s and %4$s and %5$s"
-          ,this.tableName, this.additionalParams, this.bbox, this.filter, this.datetime);
+              ,this.tableName, this.additionalParams, this.bbox, this.filter, this.datetime);
     }
+
+    if (!bbox.isEmpty() && !filter.isEmpty() && !featLimits.isEmpty()) {
+      this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s and %4$s and %5$s"
+              ,this.tableName, this.additionalParams, this.bbox, this.filter, this.featLimits);
+    }
+
+    if (!bbox.isEmpty() && !datetime.isEmpty() && !featLimits.isEmpty()) {
+      this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s and %4$s and %5$s"
+              ,this.tableName, this.additionalParams, this.bbox, this.datetime, this.featLimits);
+    }
+
+    if (!datetime.isEmpty() && !filter.isEmpty() && !featLimits.isEmpty()) {
+      this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s and %4$s and %5$s"
+              ,this.tableName, this.additionalParams, this.datetime, this.filter, this.featLimits);
+    }
+
+    // Handle all four conditions
+    if (!bbox.isEmpty() && !filter.isEmpty() && !datetime.isEmpty() && !featLimits.isEmpty()) {
+      this.sqlString = String.format("select count(id) from \"%1$s\" %2$s %3$s and %4$s and %5$s and %6$s"
+              ,this.tableName, this.additionalParams, this.bbox, this.filter, this.datetime, this.featLimits);
+    }
+
     LOGGER.debug("<builder>Count query- {}", sqlString);
     return sqlString;
   }
