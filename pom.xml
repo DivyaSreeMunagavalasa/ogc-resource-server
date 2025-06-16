@@ -469,7 +469,6 @@
 				</configuration>
             </plugin>
             <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>${maven-compiler-plugin.version}</version>
                 <configuration>
@@ -479,10 +478,6 @@
                         <annotationProcessor>io.vertx.codegen.CodeGenProcessor</annotationProcessor>
                         <annotationProcessor>com.google.auto.service.processor.AutoServiceProcessor</annotationProcessor>
                     </annotationProcessors>
-                    <compilerArgs>
-                        <arg>--add-opens</arg>
-                        <arg>java.base/java.lang=ALL-UNNAMED</arg>
-                    </compilerArgs>
                 </configuration>
             </plugin>
             <plugin>
