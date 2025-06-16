@@ -52,9 +52,9 @@ pipeline {
           }
           dir('ets-ogcapi-features10') {
             if(!fileExists('target')) {
-                sh 'mvn clean package -Dmaven.test.skip -Dmaven.javadoc.skip=true -Denforcer.skip=true'
+                sh 'mvn clean package -Dmaven.test.skip -Dmaven.javadoc.skip=true -Denforcer.skip=true -Dmaven.site.skip=true -Dspring-javaformat.skip=true'
             }
-            sh 'java -jar target/ets-ogcapi-features10-1.8-SNAPSHOT-aio.jar --generateHtmlReport true /var/lib/jenkins/iudx/ogc/compliance.xml'
+            sh 'java -jar target/ets-ogcapi-features10-1.10-SNAPSHOT-aio.jar --generateHtmlReport true /var/lib/jenkins/iudx/ogc/compliance.xml'
             }
             }
           }
