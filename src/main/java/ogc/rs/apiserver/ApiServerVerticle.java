@@ -322,12 +322,11 @@ public class ApiServerVerticle extends AbstractVerticle {
             .collect(Collectors.toMap(Map.Entry::getKey, e -> (String) e.getValue()));
 
     // Extract limits from user's token constraints
-    JsonObject limitsJson = user.getConstraints().getJsonObject("limits");
+    JsonObject limitsJson = user.getConstraints().getJsonObject("limits", new JsonObject());
     Limits limits = Limits.fromJson(limitsJson);
 
-    if (limits != null) {
       // Extract bbox limit from user's token constraints
-      if (limits.getBboxLimit() != null) {
+      if (limits.getBboxLimit() != null && !limits.getBboxLimit().isEmpty()) {
         List<Double> tokenBboxList = limits.getBboxLimit();
         String tokenBbox = "[" + tokenBboxList.stream()
                 .map(String::valueOf)
@@ -337,8 +336,8 @@ public class ApiServerVerticle extends AbstractVerticle {
       }
 
       // Extract feature limits from user's token constraints
-      if (limits.getFeatLimit() != null) {
-        Map<String, List<String>> featLimits = limits.getFeatLimit();
+      if (limits.getFeatLimit() != null && !limits.getFeatLimit().isEmpty()) {
+          Map<String, List<String>> featLimits = limits.getFeatLimit();
 
           String collectionIdFromToken = featLimits.keySet().iterator().next();
 
@@ -352,9 +351,8 @@ public class ApiServerVerticle extends AbstractVerticle {
           LOGGER.debug("<APIServer> Boundary collection ID: {}", boundaryCollectionId);
 
       }
-    }
 
-    LOGGER.debug("<APIServer> QP- {}", queryParamsMap);
+      LOGGER.debug("<APIServer> QP- {}", queryParamsMap);
 
     Future<Map<String, Integer>> isCrsValid = dbService.isCrsValid(collectionId, queryParamsMap);
     isCrsValid
@@ -403,10 +401,12 @@ public class ApiServerVerticle extends AbstractVerticle {
             .filter(i -> i.getValue() != null)
             .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().toString()));
 
-    // Extract bbox limit from user's token constraints
-    JsonObject limitsJson = user.getConstraints().getJsonObject("limits");
+    // Extract limits from user's token constraints
+    JsonObject limitsJson = user.getConstraints().getJsonObject("limits", new JsonObject());
     Limits limits = Limits.fromJson(limitsJson);
-    if (limits != null && limits.getBboxLimit() != null) {
+
+    // Extract bbox limit from user's token constraints
+    if (limits.getBboxLimit() != null && !limits.getBboxLimit().isEmpty()) {
       List<Double> tokenBboxList = limits.getBboxLimit();
       String tokenBbox = "[" + tokenBboxList.stream()
               .map(String::valueOf)
@@ -416,7 +416,7 @@ public class ApiServerVerticle extends AbstractVerticle {
     }
 
     // Extract feat limit from user's token constraints
-    if (limits != null && limits.getFeatLimit() != null && !limits.getFeatLimit().isEmpty()) {
+    if (limits.getFeatLimit() != null && !limits.getFeatLimit().isEmpty()) {
       Map<String, List<String>> featLimits = limits.getFeatLimit();
       // Convert feat limits to a format that can be passed to database service
       // We'll pass the collection ID and feature IDs as query parameters
