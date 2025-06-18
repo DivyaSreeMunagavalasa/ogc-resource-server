@@ -1,5 +1,7 @@
 package ogc.rs.apiserver.util;
 
+import io.vertx.codegen.annotations.DataObject;
+import io.vertx.codegen.annotations.GenIgnore;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import org.apache.logging.log4j.LogManager;
@@ -15,16 +17,43 @@ import static ogc.rs.apiserver.util.Constants.*;
 /**
  * Represents API usage, data usage, spatial (bbox), and feature limits extracted from a user's token.
  */
+@DataObject
 public class Limits {
+    @GenIgnore
     private static final Logger LOGGER = LogManager.getLogger(Limits.class);
-    private final Long policyIssuedAt;
-    private final Long dataUsageLimitInBytes;
-    private final Long apiHitsLimit;
-    private final List<Double> bboxLimit;
-    private final Map<String, List<String>> featLimit;
+
+    private Long policyIssuedAt;
+    private Long dataUsageLimitInBytes;
+    private Long apiHitsLimit;
+    private JsonArray bboxLimit;
+    private JsonObject featLimit;
+
+    // Default constructor required for @DataObject
+    public Limits() {
+    }
+
+    // Constructor from JsonObject (required for @DataObject)
+    public Limits(JsonObject json) {
+        this.policyIssuedAt = json.getLong("policyIssuedAt");
+        this.dataUsageLimitInBytes = json.getLong("dataUsageLimitInBytes");
+        this.apiHitsLimit = json.getLong("apiHitsLimit");
+        this.bboxLimit = json.getJsonArray("bboxLimit");
+        this.featLimit = json.getJsonObject("featLimit");
+    }
+
+    // Convert to JsonObject (required for @DataObject)
+    public JsonObject toJson() {
+        JsonObject json = new JsonObject();
+        if (policyIssuedAt != null) json.put("policyIssuedAt", policyIssuedAt);
+        if (dataUsageLimitInBytes != null) json.put("dataUsageLimitInBytes", dataUsageLimitInBytes);
+        if (apiHitsLimit != null) json.put("apiHitsLimit", apiHitsLimit);
+        if (bboxLimit != null) json.put("bboxLimit", bboxLimit);
+        if (featLimit != null) json.put("featLimit", featLimit);
+        return json;
+    }
 
     private Limits(Long policyIssuedAt, Long dataUsageLimitInBytes, Long apiHitsLimit,
-                   List<Double> bboxLimit, Map<String, List<String>> featLimit) {
+                   JsonArray bboxLimit, JsonObject featLimit) {
         this.policyIssuedAt = policyIssuedAt;
         this.dataUsageLimitInBytes = dataUsageLimitInBytes;
         this.apiHitsLimit = apiHitsLimit;
@@ -38,8 +67,8 @@ public class Limits {
      * @param limitsJson JsonObject with fields like "iat", "dataUsage", "apiHits", "bbox", "feat"
      * @return Limits object, or null if limitsJson is null
      */
+    @GenIgnore
     public static Limits fromJson(JsonObject limitsJson) {
-
         if (limitsJson == null) {
             return null;
         }
@@ -57,14 +86,14 @@ public class Limits {
             apiHits = limitsJson.getLong("apiHits");
         }
 
-        List<Double> bbox = null;
+        JsonArray bbox = null;
         if (limitsJson.containsKey("bbox")) {
-            bbox = parseBboxLimit(limitsJson.getJsonArray("bbox"));
+            bbox = parseBboxLimitToJsonArray(limitsJson.getJsonArray("bbox"));
         }
 
-        Map<String, List<String>> feat = null;
+        JsonObject feat = null;
         if (limitsJson.containsKey("feat")) {
-            feat = parseFeatLimit(limitsJson.getJsonObject("feat"));
+            feat = parseFeatLimitToJsonObject(limitsJson.getJsonObject("feat"));
         }
 
         return new Limits(iat, dataUsageBytes, apiHits, bbox, feat);
@@ -77,6 +106,7 @@ public class Limits {
      * @return Limit in bytes
      * @throws OgcException if the unit is invalid or unsupported
      */
+    @GenIgnore
     private static Long parseDataUsageToBytes(String limit) {
         if (limit == null || limit.isEmpty()) {
             return null;
@@ -105,22 +135,10 @@ public class Limits {
     }
 
     /**
-     * Parses a JSON array representing a 2D bounding box into a List<Double>.
-     * The expected format is:
-     *   bbox = [minLon, minLat, maxLon, maxLat] or: [west, south, east, north]
-     * where:
-     *   - minLon (west) ∈ [-180, 180]
-     *   - maxLon (east) ∈ [-180, 180]
-     *   - minLat (south) ∈ [-90, 90]
-     *   - maxLat (north) ∈ [-90, 90]
-     *   - minLon < maxLon i,e west < east
-     *   - minLat < maxLat i,e south < north
-     *
-     * @param bboxArray JsonArray containing exactly 4 numeric values
-     * @return List<Double> representation of the bounding box
-     * @throws OgcException if the format, type, range, or ordering is invalid
+     * Parses and validates bbox limit, returning as JsonArray for DataObject compatibility.
      */
-    private static List<Double> parseBboxLimit(JsonArray bboxArray) {
+    @GenIgnore
+    private static JsonArray parseBboxLimitToJsonArray(JsonArray bboxArray) {
         if (bboxArray == null || bboxArray.isEmpty()) {
             return null;
         }
@@ -129,7 +147,7 @@ public class Limits {
             throw new OgcException(400, "Bad Request", INVALID_BBOX_FORMAT);
         }
 
-        List<Double> bbox = new ArrayList<>();
+        JsonArray validatedBbox = new JsonArray();
         for (int i = 0; i < bboxArray.size(); i++) {
             Object val = bboxArray.getValue(i);
             if (!(val instanceof Number)) {
@@ -141,13 +159,13 @@ public class Limits {
                 throw new OgcException(400, "Bad Request", ERR_BBOX_NON_FINITE);
             }
 
-            bbox.add(value);
+            validatedBbox.add(value);
         }
 
-        double minLon = bbox.get(0);
-        double minLat = bbox.get(1);
-        double maxLon = bbox.get(2);
-        double maxLat = bbox.get(3);
+        double minLon = validatedBbox.getDouble(0);
+        double minLat = validatedBbox.getDouble(1);
+        double maxLon = validatedBbox.getDouble(2);
+        double maxLat = validatedBbox.getDouble(3);
 
         LOGGER.debug("minLon, minLat, maxLon, maxLat in token bbox: {} {} {} {}", minLon, minLat, maxLon, maxLat);
 
@@ -163,23 +181,19 @@ public class Limits {
             throw new OgcException(400, "Bad Request", ERR_BBOX_MIN_MAX_ORDER);
         }
 
-        return bbox;
+        return validatedBbox;
     }
 
     /**
-     * Parses feature limits from the token.
-     * Expected format: {"collectionId": ["featureId1", "featureId2", ...]}
-     *
-     * @param featObject JsonObject containing collection to feature ID mappings
-     * @return Map of collection IDs to lists of allowed feature IDs
-     * @throws OgcException if the format is invalid
+     * Parses and validates feature limits, returning as JsonObject for DataObject compatibility.
      */
-    private static Map<String, List<String>> parseFeatLimit(JsonObject featObject) {
+    @GenIgnore
+    private static JsonObject parseFeatLimitToJsonObject(JsonObject featObject) {
         if (featObject == null || featObject.isEmpty()) {
             return null;
         }
 
-        Map<String, List<String>> featMap = new HashMap<>();
+        JsonObject validatedFeat = new JsonObject();
 
         for (String collectionId : featObject.fieldNames()) {
             JsonArray featureIds = featObject.getJsonArray(collectionId);
@@ -187,24 +201,51 @@ public class Limits {
                 throw new OgcException(400, "Bad Request", "Invalid feature limit format for collection: " + collectionId);
             }
 
-            List<String> featureIdList = new ArrayList<>();
+            JsonArray validatedFeatureIds = new JsonArray();
             for (int i = 0; i < featureIds.size(); i++) {
                 Object featureId = featureIds.getValue(i);
                 if (featureId != null) {
-                    featureIdList.add(featureId.toString());
+                    validatedFeatureIds.add(featureId.toString());
                 }
             }
 
-            if (featureIdList.size() > 10) {
+            if (validatedFeatureIds.size() > 10) {
                 throw new OgcException(400, "Bad Request", "Maximum 10 feature IDs allowed per collection");
             }
 
-            featMap.put(collectionId, featureIdList);
+            validatedFeat.put(collectionId, validatedFeatureIds);
         }
 
-        return featMap;
+        return validatedFeat;
     }
 
+    // Convenience methods to get typed data
+    @GenIgnore
+    public List<Double> getBboxLimitAsList() {
+        if (bboxLimit == null) return null;
+        List<Double> result = new ArrayList<>();
+        for (int i = 0; i < bboxLimit.size(); i++) {
+            result.add(bboxLimit.getDouble(i));
+        }
+        return result;
+    }
+
+    @GenIgnore
+    public Map<String, List<String>> getFeatLimitAsMap() {
+        if (featLimit == null) return null;
+        Map<String, List<String>> result = new HashMap<>();
+        for (String collectionId : featLimit.fieldNames()) {
+            JsonArray featureIds = featLimit.getJsonArray(collectionId);
+            List<String> featureIdList = new ArrayList<>();
+            for (int i = 0; i < featureIds.size(); i++) {
+                featureIdList.add(featureIds.getString(i));
+            }
+            result.put(collectionId, featureIdList);
+        }
+        return result;
+    }
+
+    // Getters
     public Long getPolicyIssuedAt() {
         return policyIssuedAt;
     }
@@ -217,11 +258,11 @@ public class Limits {
         return apiHitsLimit;
     }
 
-    public List<Double> getBboxLimit() {
+    public JsonArray getBboxLimit() {
         return bboxLimit;
     }
 
-    public Map<String, List<String>> getFeatLimit() {
+    public JsonObject getFeatLimit() {
         return featLimit;
     }
 }

@@ -13,6 +13,7 @@ import java.util.*;
 import java.util.stream.Collector;
 import java.util.stream.Collectors;
 import ogc.rs.apiserver.router.RouterManager;
+import ogc.rs.apiserver.util.Limits;
 import ogc.rs.apiserver.util.OgcException;
 import ogc.rs.apiserver.util.StacItemSearchParams;
 import ogc.rs.database.util.FeatureQueryBuilder;
@@ -106,7 +107,7 @@ public class DatabaseServiceImpl implements DatabaseService{
     }
     @Override
     public Future<JsonObject> getFeatures(String collectionId, Map<String, String> queryParams,
-                                          Map<String, Integer> crs) {
+                                          Limits limits, Map<String, Integer> crs) {
         LOGGER.info("getFeatures");
         Promise<JsonObject> result = Promise.promise();
 
@@ -135,19 +136,24 @@ public class DatabaseServiceImpl implements DatabaseService{
 
         Future<Void> bboxFuture = sridOfStorageCrs.compose(srid -> {
             LOGGER.debug("srid is: {}", srid);
-            if (queryParams.get("bbox") != null || queryParams.get("tokenBbox") != null) {
-                LOGGER.debug("Entered into bbox check");
+            String queryBbox = queryParams.get("bbox");
+            // Check for bbox limits from token
+            List<Double> tokenBboxList = (limits != null && limits.getBboxLimit() != null) ? limits.getBboxLimitAsList() : null;
+            String tokenBbox = null;
+            if (tokenBboxList != null && !tokenBboxList.isEmpty()) {
+                tokenBbox = tokenBboxList.stream()
+                        .map(String::valueOf)
+                        .collect(Collectors.joining(","));
+                LOGGER.debug("Token bbox from limits: {}", tokenBbox);
+            }
 
-                String queryBbox = queryParams.get("bbox");
-                String tokenBbox = queryParams.get("tokenBbox");
-                LOGGER.debug("The query param bbox is : {}", queryBbox);
+            if (queryBbox != null || tokenBbox != null) {
+                LOGGER.debug("Entered into bbox check");
                 LOGGER.debug("The token bbox is : {}", tokenBbox);
 
                 if (queryBbox != null) {
                     queryBbox = queryBbox.replace("[", "").replace("]", "");
-                }
-                if (tokenBbox != null) {
-                    tokenBbox = tokenBbox.replace("[", "").replace("]", "");
+                    LOGGER.debug("The query param bbox is : {}", queryBbox);
                 }
 
                 Promise<Void> bboxPromise = Promise.promise();
@@ -166,7 +172,7 @@ public class DatabaseServiceImpl implements DatabaseService{
                                     Row row = rows.iterator().next();
                                     boolean intersects = row.getBoolean(0);
                                     if (intersects) {
-                                        LOGGER.debug("both token bbox and query param bbox are getting intersected...");
+                                        LOGGER.debug("Both token bbox and query param bbox are getting intersected...");
                                         featureQuery.setBboxWhenTokenBboxExists(finalQueryBbox, finalTokenBbox, srid);
                                         bboxPromise.complete();
                                     } else {
@@ -198,11 +204,14 @@ public class DatabaseServiceImpl implements DatabaseService{
 
         // Add feature limits handling
         Future<Void> featLimitsFuture = bboxFuture.compose(v -> {
-            String tokenFeatCollectionId = queryParams.get("tokenFeatCollectionId");
-            String tokenFeatIds = queryParams.get("tokenFeatIds");
+            // Check for feature limits from token
+            if (limits != null && limits.getFeatLimit() != null && !limits.getFeatLimit().isEmpty()) {
+                Map<String, List<String>> featLimits = limits.getFeatLimitAsMap();
+                String tokenFeatCollectionId = featLimits.keySet().iterator().next();
+                List<String> tokenFeatureIds = featLimits.get(tokenFeatCollectionId);
+                String tokenFeatIds = String.join(",", tokenFeatureIds);
 
-            if (tokenFeatCollectionId != null && tokenFeatIds != null) {
-                LOGGER.debug("Processing feature limits - Token Collection: {}, Token Feature IDs: {}",
+                LOGGER.debug("Processing feature limits from token - Collection: {}, Feature IDs: {}",
                         tokenFeatCollectionId, tokenFeatIds);
 
                 // Set feature limits in the query builder
@@ -215,16 +224,16 @@ public class DatabaseServiceImpl implements DatabaseService{
 
         // Continue only after both bboxFuture and featLimitsFuture complete
         return featLimitsFuture.compose(v -> sridOfStorageCrs.compose(srid ->
-                        client.withConnection(conn ->
-                                conn.preparedQuery("select datetime_key from collections_details where id = $1::uuid")
-                                        .collecting(collector)
-                                        .execute(Tuple.of(UUID.fromString(collectionId)))
-                                        .compose(conn1 -> {
-                                            if (conn1.value().get(0).getString("datetime_key") != null && datetimeValue != null ){
-                                                String datetimeKey = conn1.value().get(0).getString("datetime_key");
-                                                featureQuery.setDatetimeKey(datetimeKey);
-                                                featureQuery.setDatetime(datetimeValue);
-                                            }
+                client.withConnection(conn ->
+                        conn.preparedQuery("select datetime_key from collections_details where id = $1::uuid")
+                                .collecting(collector)
+                                .execute(Tuple.of(UUID.fromString(collectionId)))
+                                .compose(conn1 -> {
+                                    if (conn1.value().get(0).getString("datetime_key") != null && datetimeValue != null ){
+                                        String datetimeKey = conn1.value().get(0).getString("datetime_key");
+                                        featureQuery.setDatetimeKey(datetimeKey);
+                                        featureQuery.setDatetime(datetimeValue);
+                                    }
                                             LOGGER.debug("datetime_key: {}",conn1.value().get(0).getString("datetime_key"));
                                             LOGGER.debug("<DBService> Sql query- {} ",  featureQuery.buildSqlString());
                                             LOGGER.debug("Count Query- {}", featureQuery.buildSqlString("count"));
@@ -322,14 +331,11 @@ public class DatabaseServiceImpl implements DatabaseService{
 
     @Override
     public Future<JsonObject> getFeature(String collectionId, Integer featureId, Map<String, String> queryParams,
-                                         Map<String, Integer> crs) {
+                                         Limits limits, Map<String, Integer> crs) {
         LOGGER.info("getFeature");
         Promise<JsonObject> result = Promise.promise();
 
         Collector<Row, ?, List<JsonObject>> collector = Collectors.mapping(Row::toJson, Collectors.toList());
-        String tokenBbox = queryParams.get("tokenBbox");
-        String featLimit = queryParams.get("featLimit");
-        String boundaryCollectionId = queryParams.get("boundaryCollectionId");
         String srid = String.valueOf(crs.get(queryParams.get("crs")));
         String geoColumn = "cast(st_asgeojson(st_transform(geom," + srid + "),9,0) as json)";
 
@@ -345,8 +351,7 @@ public class DatabaseServiceImpl implements DatabaseService{
                             }
 
                             // Feature exists, now apply filters
-                            return applySpatialFiltersAndGetFeature(conn, collectionId, featureId, tokenBbox,
-                                    featLimit, boundaryCollectionId, geoColumn, collector);
+                            return applySpatialFiltersAndGetFeature(conn, collectionId, featureId, limits, geoColumn, collector);
                         })
         ).onComplete(ar -> {
             if (ar.succeeded()) {
@@ -366,9 +371,8 @@ public class DatabaseServiceImpl implements DatabaseService{
     }
 
     private Future<JsonObject> applySpatialFiltersAndGetFeature(SqlConnection conn, String collectionId, Integer featureId,
-                                                                String tokenBbox, String featLimit, String boundaryCollectionId,
-                                                                String geoColumn, Collector<Row, ?, List<JsonObject>> collector) {
-
+                                                                Limits limits, String geoColumn,
+                                                                Collector<Row, ?, List<JsonObject>> collector) {
         StringBuilder sqlBuilder = new StringBuilder();
         sqlBuilder.append("SELECT request_feature.id, 'Feature' AS type, ")
                 .append("cast(st_asgeojson(st_transform(request_feature.geom,")
@@ -376,11 +380,19 @@ public class DatabaseServiceImpl implements DatabaseService{
                 .append(" as geometry, ")
                 .append("(row_to_json(request_feature)::jsonb - 'id' - 'geom') as properties ");
 
-        boolean hasFeatLimit = featLimit != null && !featLimit.isEmpty() && boundaryCollectionId != null;
-        boolean hasBboxLimit = tokenBbox != null && !tokenBbox.isEmpty();
+        // Check if we have feature limits
+        boolean hasFeatLimit = limits != null && limits.getFeatLimitAsMap() != null && !limits.getFeatLimitAsMap().isEmpty();
+
+        // Check if we have bbox limits
+        boolean hasBboxLimit = limits != null && limits.getBboxLimitAsList() != null && !limits.getBboxLimitAsList().isEmpty();
 
         if (hasFeatLimit) {
             // Use spatial intersection with boundary collection
+            Map<String, List<String>> featLimits = limits.getFeatLimitAsMap();
+            String boundaryCollectionId = featLimits.keySet().iterator().next();
+            List<String> allowedFeatureIds = featLimits.get(boundaryCollectionId);
+            String featLimit = String.join(",", allowedFeatureIds);
+
             sqlBuilder.append("FROM \"").append(collectionId).append("\" AS request_feature ")
                     .append("JOIN \"").append(boundaryCollectionId).append("\" AS token_feature ")
                     .append("ON ST_Intersects(request_feature.geom, token_feature.geom) ")
@@ -388,11 +400,15 @@ public class DatabaseServiceImpl implements DatabaseService{
                     .append("AND token_feature.id IN (").append(featLimit).append(")");
         } else if (hasBboxLimit) {
             // Only bbox filter
-            String cleanTokenBbox = tokenBbox.replace("[", "").replace("]", "");
+            List<Double> bboxList = limits.getBboxLimitAsList();
+            String tokenBbox = bboxList.stream()
+                    .map(String::valueOf)
+                    .collect(Collectors.joining(","));
+
             sqlBuilder.append("FROM \"").append(collectionId).append("\" AS request_feature ")
                     .append("WHERE request_feature.id = $1::int ")
                     .append("AND ST_Intersects(ST_Transform(request_feature.geom, 4326), ST_MakeEnvelope(")
-                    .append(cleanTokenBbox).append(", 4326))");
+                    .append(tokenBbox).append(", 4326))");
         } else {
             // No filters, just get the feature
             sqlBuilder.append("FROM \"").append(collectionId).append("\" AS request_feature ")

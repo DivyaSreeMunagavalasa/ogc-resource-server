@@ -7,6 +7,7 @@ import io.vertx.core.Future;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
+import ogc.rs.apiserver.util.Limits;
 import ogc.rs.apiserver.util.StacItemSearchParams;
 import java.util.List;
 import java.util.Map;
@@ -26,10 +27,9 @@ public interface DatabaseService {
 
     Future<List<JsonObject>>  getCollection(final String collectionId);
 
-    Future<JsonObject> getFeatures(String collectionId, Map<String, String> queryParams, Map<String, Integer> crs);
+    Future<JsonObject> getFeatures(String collectionId, Map<String, String> queryParams, Limits limits, Map<String, Integer> crs);
 
-    Future<JsonObject> getFeature(String collectionId, Integer featureId, Map<String, String> queryParams, Map<String,
-        Integer> crs);
+    Future<JsonObject> getFeature(String collectionId, Integer featureId, Map<String, String> queryParams, Limits limits, Map<String, Integer> crs);
 
     Future<Map<String, Integer>> isCrsValid(String collectionId, Map<String, String> queryParams);
 
