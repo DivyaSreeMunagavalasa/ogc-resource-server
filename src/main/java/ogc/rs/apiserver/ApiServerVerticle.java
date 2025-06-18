@@ -69,7 +69,7 @@ import ogc.rs.metering.MeteringService;
 import ogc.rs.processes.ProcessesRunnerService;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-
+import static ogc.rs.apiserver.handlers.TokenLimitsEnforcementHandler.getLimitsFromContext;
 import static ogc.rs.apiserver.handlers.DxTokenAuthenticationHandler.USER_KEY;
 import static ogc.rs.apiserver.handlers.StacItemByIdAuthZHandler.SHOULD_CREATE_KEY;
 import static ogc.rs.apiserver.util.Constants.NOT_FOUND;
@@ -311,52 +311,23 @@ public class ApiServerVerticle extends AbstractVerticle {
   }
 
   public void getFeature(RoutingContext routingContext) {
-
     RequestParameters requestParameters = routingContext.get(ValidationHandler.REQUEST_CONTEXT_KEY);
     String collectionId = routingContext.request().path().split("/")[2];
     Integer featureId = requestParameters.pathParameter("featureId").getInteger();
-    AuthInfo user = routingContext.get(USER_KEY);
     Map<String, Object> queryParams = requestParameters.toJson().getJsonObject("query").getMap();
     Map<String, String> queryParamsMap = queryParams.entrySet()
             .stream()
             .collect(Collectors.toMap(Map.Entry::getKey, e -> (String) e.getValue()));
 
-    // Extract limits from user's token constraints
-    JsonObject limitsJson = user.getConstraints().getJsonObject("limits", new JsonObject());
-    Limits limits = Limits.fromJson(limitsJson);
+    // Get validated limits from context (set by TokenLimitsEnforcementHandler)
+    Limits limits = getLimitsFromContext(routingContext);
 
-      // Extract bbox limit from user's token constraints
-      if (limits.getBboxLimit() != null && !limits.getBboxLimit().isEmpty()) {
-        List<Double> tokenBboxList = limits.getBboxLimit();
-        String tokenBbox = "[" + tokenBboxList.stream()
-                .map(String::valueOf)
-                .collect(Collectors.joining(",")) + "]";
-        queryParamsMap.put("tokenBbox", tokenBbox);
-        LOGGER.debug("<APIServer> Token BBOX injected: {}", tokenBboxList);
-      }
-
-      // Extract feature limits from user's token constraints
-      if (limits.getFeatLimit() != null && !limits.getFeatLimit().isEmpty()) {
-          Map<String, List<String>> featLimits = limits.getFeatLimit();
-
-          String collectionIdFromToken = featLimits.keySet().iterator().next();
-
-          List<String> allowedFeatureIds = featLimits.get(collectionIdFromToken);
-          String featLimitIds = String.join(",", allowedFeatureIds);
-          queryParamsMap.put("featLimit", featLimitIds);
-          LOGGER.debug("<APIServer> Feature limits injected for collection {}: {}", collectionIdFromToken, featLimitIds);
-
-          String boundaryCollectionId = featLimits.keySet().iterator().next();
-          queryParamsMap.put("boundaryCollectionId", boundaryCollectionId);
-          LOGGER.debug("<APIServer> Boundary collection ID: {}", boundaryCollectionId);
-
-      }
-
-      LOGGER.debug("<APIServer> QP- {}", queryParamsMap);
+    LOGGER.debug("<APIServer> QP- {}", queryParamsMap);
+    LOGGER.debug("<APIServer> Limits- {}", limits);
 
     Future<Map<String, Integer>> isCrsValid = dbService.isCrsValid(collectionId, queryParamsMap);
     isCrsValid
-            .compose(crs -> dbService.getFeature(collectionId, featureId, queryParamsMap, crs))
+            .compose(crs -> dbService.getFeature(collectionId, featureId, queryParamsMap, limits, crs))
             .onSuccess(success -> {
               // TODO: Add base_path from config
               success.put("links", new JsonArray()
@@ -389,10 +360,10 @@ public class ApiServerVerticle extends AbstractVerticle {
                     });
   }
 
+
   public void getFeatures(RoutingContext routingContext) {
     RequestParameters requestParameters = routingContext.get(ValidationHandler.REQUEST_CONTEXT_KEY);
     String collectionId = routingContext.request().path().split("/")[2];
-    AuthInfo user = routingContext.get(USER_KEY);
 
     // Extract query parameters as a mutable map
     Map<String, Object> queryParams = requestParameters.toJson().getJsonObject("query").getMap();
@@ -401,39 +372,11 @@ public class ApiServerVerticle extends AbstractVerticle {
             .filter(i -> i.getValue() != null)
             .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().toString()));
 
-    // Extract limits from user's token constraints
-    JsonObject limitsJson = user.getConstraints().getJsonObject("limits", new JsonObject());
-    Limits limits = Limits.fromJson(limitsJson);
-
-    // Extract bbox limit from user's token constraints
-    if (limits.getBboxLimit() != null && !limits.getBboxLimit().isEmpty()) {
-      List<Double> tokenBboxList = limits.getBboxLimit();
-      String tokenBbox = "[" + tokenBboxList.stream()
-              .map(String::valueOf)
-              .collect(Collectors.joining(",")) + "]";
-      queryParamsMap.put("tokenBbox", tokenBbox);
-      LOGGER.debug("<APIServer> Token BBOX injected: {}", tokenBboxList);
-    }
-
-    // Extract feat limit from user's token constraints
-    if (limits.getFeatLimit() != null && !limits.getFeatLimit().isEmpty()) {
-      Map<String, List<String>> featLimits = limits.getFeatLimit();
-      // Convert feat limits to a format that can be passed to database service
-      // We'll pass the collection ID and feature IDs as query parameters
-      for (Map.Entry<String, List<String>> entry : featLimits.entrySet()) {
-        String tokenCollectionId = entry.getKey();
-        List<String> tokenFeatureIds = entry.getValue();
-
-        // Add token feature limits to query params
-        queryParamsMap.put("tokenFeatCollectionId", tokenCollectionId);
-        queryParamsMap.put("tokenFeatIds", String.join(",", tokenFeatureIds));
-        LOGGER.debug("<APIServer> Token Feature Limits injected - Collection: {}, Features: {}",
-                tokenCollectionId, tokenFeatureIds);
-        break;
-      }
-    }
+    // Get validated limits from context (set by TokenLimitsEnforcementHandler)
+    Limits limits = getLimitsFromContext(routingContext);
 
     LOGGER.debug("<APIServer> QP- {}", queryParamsMap);
+    LOGGER.debug("<APIServer> Limits- {}", limits);
 
     Future<Map<String, Integer>> isCrsValid = dbService.isCrsValid(collectionId, queryParamsMap);
     isCrsValid
@@ -476,7 +419,7 @@ public class ApiServerVerticle extends AbstractVerticle {
               }
               return Future.succeededFuture();
             })
-            .compose(dbCall -> dbService.getFeatures(collectionId, queryParamsMap, isCrsValid.result()))
+            .compose(dbCall -> dbService.getFeatures(collectionId, queryParamsMap, limits, isCrsValid.result()))
             .onSuccess(success -> {
               success.put("links", new JsonArray());
               int limit = Integer.parseInt(queryParamsMap.get("limit"));
@@ -532,7 +475,6 @@ public class ApiServerVerticle extends AbstractVerticle {
               routingContext.next();
             });
   }
-
 
   public void getProcesses(RoutingContext routingContext) {
     RequestParameters paramsFromOasValidation = routingContext.get(ValidationHandler.REQUEST_CONTEXT_KEY);
