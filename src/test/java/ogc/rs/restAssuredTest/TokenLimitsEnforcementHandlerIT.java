@@ -480,4 +480,206 @@ public class TokenLimitsEnforcementHandlerIT {
                         .when().get("/collections/{collectionId}/items/{featureId}");
         response.then().statusCode(403).body(DESCRIPTION_KEY, is("Feature not found within the bbox limit"));
     }
+
+    @Test
+    @Description("Success: Test feature limit enforcement at /items endpoint")
+    public void testFeatureLimitsEnforcementSuccess(){
+        LOGGER.info("Testing feature limit enforcement at /items endpoint success");
+        // World Administrative Country Boundaries CollectionId in the token- cfdecaed-54ae-49e2-bf49-43e7d2fe0338
+        // FeatureId 5 in the token - United States of America
+        // USA Administrative State Boundaries CollectionId in the request- ba56a3d7-a0bb-49b7-a610-e231c73ebb3d
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("feat", new JsonObject()
+                                .put("cfdecaed-54ae-49e2-bf49-43e7d2fe0338", new JsonArray()
+                                        .add("5")))))
+                .build();
+        Response response = sendRequest("ba56a3d7-a0bb-49b7-a610-e231c73ebb3d", token);
+        response.then().statusCode(200);
+    }
+
+    @Test
+    @Description("Failure: Test feature limit enforcement when CollectionId in the token does not exist")
+    public void testFailureFeatureLimitsWhenCollectionIdNotExists(){
+        LOGGER.info("Testing failure of feature limit enforcement when CollectionId in the token does not exist");
+        // RANDOM_COLLECTION_ID in the token - 999024e5-0fa4-419a-9225-2604792fc504
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("feat", new JsonObject()
+                                .put("999024e5-0fa4-419a-9225-2604792fc504", new JsonArray()
+                                        .add("5")))))
+                .build();
+        Response response = sendRequest("ba56a3d7-a0bb-49b7-a610-e231c73ebb3d", token);
+        response.then().statusCode(404).body(DESCRIPTION_KEY, is("Collection not found"));
+    }
+
+    @Test
+    @Description("Failure: Test feature limit enforcement when FeatureIds in the token do not exist")
+    public void testFailureFeatureLimitsWhenFeatureIdsNotExist(){
+        LOGGER.info("Testing failure of feature limit enforcement when FeatureIds in the token do not exist");
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("feat", new JsonObject()
+                                .put("cfdecaed-54ae-49e2-bf49-43e7d2fe0338", new JsonArray()
+                                        .add("990").add("992").add("994")))))
+                .build();
+        Response response = sendRequest("ba56a3d7-a0bb-49b7-a610-e231c73ebb3d", token);
+        response.then().statusCode(403).body(DESCRIPTION_KEY, is("One or more features in the token do not exist"));
+    }
+
+    @Test
+    @Description("Failure: Test feature limit enforcement when more than 10 FeatureIds exist in the token")
+    public void testFailureFeatureLimitsWhenMoreThan10FeatureIdsExist(){
+        LOGGER.info("Testing failure of feature limit enforcement when more than 10 FeatureIds exist in the token");
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("feat", new JsonObject()
+                                .put("cfdecaed-54ae-49e2-bf49-43e7d2fe0338", new JsonArray()
+                                        .add("1").add("2").add("3").add("4").add("5").add("6")
+                                        .add("7").add("8").add("9").add("10").add("11").add("12")
+                                ))))
+                .build();
+        Response response = sendRequest("ba56a3d7-a0bb-49b7-a610-e231c73ebb3d", token);
+        response.then().statusCode(400).body(DESCRIPTION_KEY, is("Maximum 10 feature IDs allowed per collection"));
+    }
+
+    @Test
+    @Description("Failure: Test feature limit enforcement at /items endpoint")
+    public void testFeatureLimitsEnforcementFailure(){
+        LOGGER.info("Testing feature limit enforcement at /items endpoint failure");
+        // World Administrative Country Boundaries CollectionId in the token - cfdecaed-54ae-49e2-bf49-43e7d2fe0338
+        // FeatureId 99 in the token - India
+        // USA Administrative States Boundaries CollectionId in the request - ba56a3d7-a0bb-49b7-a610-e231c73ebb3d
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("feat", new JsonObject()
+                                .put("cfdecaed-54ae-49e2-bf49-43e7d2fe0338", new JsonArray()
+                                        .add("99")))))
+                .build();
+        Response response = sendRequest("ba56a3d7-a0bb-49b7-a610-e231c73ebb3d", token);
+        response.then().statusCode(403).body(DESCRIPTION_KEY, is("Feature not found within the allowed feature boundaries"));
+    }
+
+    @Test
+    @Description("Failure: Test feature limit enforcement when no FeatureIds exist in the token")
+    public void testFailureFeatureLimitsWhenNoFeatureIdsExist() {
+        LOGGER.info("Testing failure of feature limit enforcement when no FeatureIds exist in the token");
+
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("feat", new JsonObject()
+                                .put("cfdecaed-54ae-49e2-bf49-43e7d2fe0338", new JsonArray()))
+                ))
+                .build();
+        Response response = sendRequest("ba56a3d7-a0bb-49b7-a610-e231c73ebb3d", token);
+        response.then().statusCode(400).body(DESCRIPTION_KEY, is("Invalid feature limit format for collection in the token"));
+    }
+
+    @Test
+    @Description("Failure: Test feature limit enforcement when invalid collection format in the token")
+    public void testFailureFeatureLimitsWhenInvalidCollectionFormat() {
+        LOGGER.info("Testing failure of feature limit enforcement when invalid collection format in the token");
+
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("feat", new JsonObject()
+                                .put("World Administrative Country Boundaries", new JsonArray()
+                                        .add("5")))
+                ))
+                .build();
+        Response response = sendRequest("ba56a3d7-a0bb-49b7-a610-e231c73ebb3d", token);
+        response.then().statusCode(400).body(DESCRIPTION_KEY, is("Invalid collection ID format (must be UUID) in the token"));
+    }
+
+    @Test
+    @Description("Failure: Test feature limit enforcement when invalid feature id format in the token")
+    public void testFailureFeatureLimitsWhenInvalidFeatureIdFormat() {
+        LOGGER.info("Testing failure of feature limit enforcement when invalid feature id format in the token");
+
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("feat", new JsonObject()
+                                .put("cfdecaed-54ae-49e2-bf49-43e7d2fe0338", new JsonArray()
+                                        .add("India")))
+                ))
+                .build();
+        Response response = sendRequest("ba56a3d7-a0bb-49b7-a610-e231c73ebb3d", token);
+        response.then().statusCode(400).body(DESCRIPTION_KEY, is("Invalid feature ID in token, must be a numeric value for collection"));
+    }
+
+    @Test
+    @Description("Success: Test feature limit enforcement at /items/{featureId} endpoint")
+    public void testFeatureLimitsInFeatureIdEndpointSuccess(){
+        LOGGER.info("Testing feature limit enforcement at /items/{featureId} endpoint success");
+        // World Administrative Country Boundaries CollectionId in the token - cfdecaed-54ae-49e2-bf49-43e7d2fe0338
+        // FeatureId 5 in the token - United States of America
+        // USA Administrative States Boundaries CollectionId in the request- ba56a3d7-a0bb-49b7-a610-e231c73ebb3d
+        // FeatureId in the request 6 - Washington
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("feat", new JsonObject()
+                                .put("cfdecaed-54ae-49e2-bf49-43e7d2fe0338", new JsonArray()
+                                        .add("5")))))
+                .build();
+        Response response =
+                given().pathParam("collectionId", "ba56a3d7-a0bb-49b7-a610-e231c73ebb3d")
+                        .pathParam("featureId", 6)
+                        .auth().oauth2(token)
+                        .contentType("application/json")
+                        .when().get("/collections/{collectionId}/items/{featureId}");
+        response.then().statusCode(200);
+    }
+
+    @Test
+    @Description("Failure: Test feature limit enforcement at /items/{featureId} endpoint")
+    public void testFeatureLimitsInFeatureIdEndpointFailure(){
+        LOGGER.info("Testing feature limit enforcement at /items/{featureId} endpoint failure");
+        // World Administrative Country Boundaries CollectionId in the token  - cfdecaed-54ae-49e2-bf49-43e7d2fe0338
+        // FeatureId 99 in the token - India
+        // USA Administrative States Boundaries CollectionId in the request - ba56a3d7-a0bb-49b7-a610-e231c73ebb3d
+        // FeatureId in the request 6 - Washington
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("feat", new JsonObject()
+                                .put("cfdecaed-54ae-49e2-bf49-43e7d2fe0338", new JsonArray()
+                                        .add("99")))))
+                .build();
+        Response response =
+                given().pathParam("collectionId", "ba56a3d7-a0bb-49b7-a610-e231c73ebb3d")
+                        .pathParam("featureId", 6)
+                        .auth().oauth2(token)
+                        .contentType("application/json")
+                        .when().get("/collections/{collectionId}/items/{featureId}");
+        response.then().statusCode(403).body(DESCRIPTION_KEY, is("Feature not found within the allowed feature boundaries"));
+    }
 }

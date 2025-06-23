@@ -142,12 +142,18 @@ public class TokenLimitsEnforcementHandler implements Handler<RoutingContext> {
                                         routingContext.next();
                                     }
                                 }).onFailure(fail -> {
-                                    LOGGER.error("Error checking feature existence: {}", fail.getMessage());
-                                    routingContext.fail(fail);
+                                    if (fail instanceof OgcException) {
+                                        OgcException ogcEx = (OgcException) fail;
+                                        LOGGER.error("Failure: {} - {}", ogcEx.getStatusCode(), ogcEx.getMessage());
+                                        routingContext.fail(ogcEx);
+                                    } else {
+                                        LOGGER.error("Unexpected error checking feature existence: {}", fail.getMessage());
+                                        routingContext.fail(new OgcException(500, "Internal Server Error", "Unexpected error during feature existence check"));
+                                    }
                                 });
                     } else {
                         // feat key exists but no limits defined
-                        LOGGER.warn(" No feature limits defined");
+                        LOGGER.warn("No feature limits defined");
                         routingContext.next();
                     }
 

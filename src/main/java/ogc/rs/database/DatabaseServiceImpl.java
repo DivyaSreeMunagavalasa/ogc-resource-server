@@ -202,7 +202,7 @@ public class DatabaseServiceImpl implements DatabaseService{
             }
         });
 
-        // Add feature limits handling
+        // Enhanced feature limits handling with intersection check
         Future<Void> featLimitsFuture = bboxFuture.compose(v -> {
             // Check for feature limits from token
             if (limits != null && limits.getFeatLimit() != null && !limits.getFeatLimit().isEmpty()) {
@@ -214,14 +214,48 @@ public class DatabaseServiceImpl implements DatabaseService{
                 LOGGER.debug("Processing feature limits from token - Collection: {}, Feature IDs: {}",
                         tokenFeatCollectionId, tokenFeatIds);
 
-                // Set feature limits in the query builder
-                featureQuery.setFeatLimits(tokenFeatCollectionId, tokenFeatIds);
-                return Future.succeededFuture();
+                Promise<Void> featLimitsPromise = Promise.promise();
+
+                // Check if there's any intersection between request collection and token feature geometries
+                String intersectionCheckSql =
+                        "SELECT EXISTS(" +
+                                "SELECT 1 FROM \"" + collectionId + "\" request_feature " +
+                                "JOIN \"" + tokenFeatCollectionId + "\" token_feature " +
+                                "ON ST_Intersects(request_feature.geom, token_feature.geom) " +
+                                "WHERE token_feature.id IN (" + tokenFeatIds + ")" +
+                                ")";
+
+                LOGGER.debug("Feature intersection check SQL: {}", intersectionCheckSql);
+
+                client.query(intersectionCheckSql).execute()
+                        .onSuccess(rows -> {
+                            if (rows.iterator().hasNext()) {
+                                Row row = rows.iterator().next();
+                                boolean hasIntersection = row.getBoolean(0);
+                                if (hasIntersection) {
+                                    LOGGER.debug("Feature intersection found, proceeding with feature limits enforcement");
+                                    // Set feature limits in the query builder
+                                    featureQuery.setFeatLimits(tokenFeatCollectionId, tokenFeatIds);
+                                    featLimitsPromise.complete();
+                                } else {
+                                    LOGGER.debug("No intersection found between request collection and token feature boundaries");
+                                    featLimitsPromise.fail(new OgcException(403, "Forbidden",
+                                            "Feature not found within the allowed feature boundaries"));
+                                }
+                            } else {
+                                featLimitsPromise.fail("No result from feature intersection check.");
+                            }
+                        })
+                        .onFailure(err -> {
+                            LOGGER.error("Feature intersection check failed: {}", err.getMessage());
+                            featLimitsPromise.fail(err);
+                        });
+
+                return featLimitsPromise.future();
             } else {
                 return Future.succeededFuture();
             }
         });
-
         // Continue only after both bboxFuture and featLimitsFuture complete
         return featLimitsFuture.compose(v -> sridOfStorageCrs.compose(srid ->
                 client.withConnection(conn ->
@@ -448,38 +482,56 @@ public class DatabaseServiceImpl implements DatabaseService{
             return result.future();
         }
 
-        // Create placeholders for the IN clause
-        String placeholders = featureIds.stream()
-                .map(id -> "$" + (featureIds.indexOf(id) + 2) + "::int")
-                .collect(Collectors.joining(","));
+        // Step 1: Check if table (collection) exists
+        String tableCheckSql = "SELECT to_regclass($1) IS NOT NULL AS exists";
+        client.preparedQuery(tableCheckSql)
+                .execute(Tuple.of(collectionId))
+                .onSuccess(tableRows -> {
+                    boolean tableExists = tableRows.iterator().next().getBoolean("exists");
+                    if (!tableExists) {
+                        LOGGER.warn("Collection table {} does not exist", collectionId);
+                        result.fail(new OgcException(404, "Not Found", "Collection not found"));
+                        return;
+                    }
 
-        String sql = "SELECT COUNT(*) as count FROM \"" + collectionId + "\" WHERE id IN (" + placeholders + ")";
+                    // Step 2: Check if all feature IDs exist
+                    String placeholders = featureIds.stream()
+                            .map(id -> "$" + (featureIds.indexOf(id) + 2) + "::int")
+                            .collect(Collectors.joining(","));
 
-        // Create tuple with collection ID and feature IDs
-        Tuple tuple = Tuple.of(UUID.fromString(collectionId));
-        for (String featureId : featureIds) {
-            tuple = tuple.addInteger(Integer.parseInt(featureId));
-        }
+                    String sql = "SELECT COUNT(*) as count FROM \"" + collectionId + "\" WHERE id IN (" + placeholders + ")";
 
-        Tuple finalTuple = tuple;
-        client.withConnection(conn ->
-                conn.preparedQuery(sql)
-                        .execute(finalTuple)
-                        .onSuccess(rows -> {
-                            int count = rows.iterator().next().getInteger("count");
-                            boolean allExist = count == featureIds.size();
-                            LOGGER.debug("Feature existence check for collection {}: {} out of {} features exist",
-                                    collectionId, count, featureIds.size());
-                            result.complete(allExist);
-                        })
-                        .onFailure(throwable -> {
-                            LOGGER.error("Error checking feature existence: {}", throwable.getMessage());
-                            result.fail(new OgcException(500, "Internal Server Error", "Error validating feature existence"));
-                        })
-        );
+                    // Create tuple with collection ID and feature IDs
+                    Tuple tuple = Tuple.of(UUID.fromString(collectionId));
+                    for (String featureId : featureIds) {
+                        tuple = tuple.addInteger(Integer.parseInt(featureId));
+                    }
+
+                    Tuple finalTuple = tuple;
+                    client.withConnection(conn ->
+                            conn.preparedQuery(sql)
+                                    .execute(finalTuple)
+                                    .onSuccess(rows -> {
+                                        int count = rows.iterator().next().getInteger("count");
+                                        boolean allExist = count == featureIds.size();
+                                        LOGGER.debug("Feature existence check for collection {}: {} out of {} features exist",
+                                                collectionId, count, featureIds.size());
+                                        result.complete(allExist);
+                                    })
+                                    .onFailure(throwable -> {
+                                        LOGGER.error("Error checking feature existence: {}", throwable.getMessage());
+                                        result.fail(new OgcException(500, "Internal Server Error", "Error validating feature existence"));
+                                    })
+                    );
+                })
+                .onFailure(err -> {
+                    LOGGER.error("Failed to check collection existence: {}", err.getMessage());
+                    result.fail(new OgcException(500, "Internal Server Error", "Error checking collection existence"));
+                });
 
         return result.future();
     }
+
 
     @Override
   public Future<List<JsonObject>> getStacCollections() {

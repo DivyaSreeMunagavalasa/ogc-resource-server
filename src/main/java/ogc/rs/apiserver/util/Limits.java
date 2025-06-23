@@ -7,10 +7,7 @@ import io.vertx.core.json.JsonObject;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 import static ogc.rs.apiserver.util.Constants.*;
 
@@ -196,16 +193,31 @@ public class Limits {
         JsonObject validatedFeat = new JsonObject();
 
         for (String collectionId : featObject.fieldNames()) {
+            // Validate that collectionId is a valid UUID
+            try {
+                UUID.fromString(collectionId);
+            } catch (IllegalArgumentException e) {
+                LOGGER.warn("Invalid collection ID format (must be UUID): {}", collectionId);
+                throw new OgcException(400, "Bad Request", "Invalid collection ID format (must be UUID) in the token");
+            }
+
             JsonArray featureIds = featObject.getJsonArray(collectionId);
-            if (featureIds == null) {
-                throw new OgcException(400, "Bad Request", "Invalid feature limit format for collection: " + collectionId);
+            if (featureIds == null || featureIds.isEmpty()) {
+                LOGGER.warn("Invalid feature limit format for collection: {}", collectionId);
+                throw new OgcException(400, "Bad Request", "Invalid feature limit format for collection in the token");
             }
 
             JsonArray validatedFeatureIds = new JsonArray();
             for (int i = 0; i < featureIds.size(); i++) {
                 Object featureId = featureIds.getValue(i);
                 if (featureId != null) {
-                    validatedFeatureIds.add(featureId.toString());
+                    String featureIdStr = featureId.toString();
+                    // Validate that featureId is numeric
+                    if (!featureIdStr.matches("\\d+")) {
+                        LOGGER.warn("Invalid feature ID in token, must be a numeric value for collection: {}, value: {}", collectionId, featureIdStr);
+                        throw new OgcException(400, "Bad Request", "Invalid feature ID in token, must be a numeric value for collection");
+                    }
+                    validatedFeatureIds.add(featureIdStr);
                 }
             }
 
