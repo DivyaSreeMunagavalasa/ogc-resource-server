@@ -216,6 +216,29 @@ public class FeatureQueryBuilder {
             "st_intersects(geom, st_geomfromgeojson('" + geometry.toString() + "'))";
   }
 
+  /**
+   * Builds a SQL query to retrieve features from the requested collection table that spatially
+   * intersect with features from the token's feature collection. The result includes feature `id`,
+   * `geometry`, and a properties object excluding `id` and `geom`. The method applies additional
+   * filters such as bounding box, datetime range, custom attribute filters, and supports pagination
+   * via offset and limit.
+   *
+   * @return A SQL SELECT query string that fetches intersecting features with optional filters and pagination.
+   * <p>
+   * The generated SQL query structure:
+   * SELECT request_feature.id, 'Feature' AS type, request_feature.geom AS geometry,
+   * (row_to_json(request_feature)::jsonb - 'id' - 'geom') AS properties
+   * FROM "<requested_table>" request_feature
+   * JOIN "<token_table>" token_feature
+   * ON ST_Intersects(request_feature.geom, token_feature.geom)
+   * WHERE token_feature.id IN (...)
+   *   [AND bbox filter]
+   *   [AND datetime filter]
+   *   [AND attribute filters]
+   *   [AND pagination offset]
+   * ORDER BY request_feature.id
+   * LIMIT <limit>;
+   */
   private String buildJoinQuery() {
     // Build the JOIN query for feature limits
     String geoColumnForJoin = geoColumn.replace("geom", "request_feature.geom");
@@ -234,14 +257,18 @@ public class FeatureQueryBuilder {
     whereConditions.append("token_feature.id IN (").append(tokenFeatIds).append(")");
 
     // Add other conditions with request_feature prefix
+
+    //bounding box filter is not necessary as of now.
     if (!bbox.isEmpty()) {
       whereConditions.append(" AND ").append(bbox.replace("geom", "request_feature.geom"));
     }
 
+    //datetime range
     if (!datetime.isEmpty()) {
       whereConditions.append(" AND ").append(datetime.replace(datetimeKey, "request_feature." + datetimeKey));
     }
 
+    // custom attribute filter
     if (!filter.isEmpty()) {
       whereConditions.append(" AND ").append(filter.replace("\"", "request_feature.\""));
     }
@@ -257,6 +284,24 @@ public class FeatureQueryBuilder {
     return query.toString();
   }
 
+  /**
+   * Builds a SQL query to count the number of features from the requested collection table that
+   * spatially intersect with features from the token's feature collection. This method applies
+   * the same filtering conditions as {@link #buildJoinQuery()}, but returns only the count instead
+   * of actual feature data.
+   *
+   * @return A SQL COUNT query string that counts intersecting features with optional filters.
+   * <p>
+   * The generated SQL query structure:
+   * SELECT COUNT(request_feature.id)
+   * FROM "<requested_table>" request_feature
+   * JOIN "<token_table>" token_feature
+   * ON ST_Intersects(request_feature.geom, token_feature.geom)
+   * WHERE token_feature.id IN (...)
+   *   [AND bbox filter]
+   *   [AND datetime filter]
+   *   [AND attribute filters];
+   */
   private String buildJoinCountQuery() {
     // Build the JOIN count query for feature limits
     StringBuilder query = new StringBuilder();
@@ -272,14 +317,18 @@ public class FeatureQueryBuilder {
     whereConditions.append("token_feature.id IN (").append(tokenFeatIds).append(")");
 
     // Add other conditions with request_feature prefix
+
+    // bounding box filter is not necessary as of now.
     if (!bbox.isEmpty()) {
       whereConditions.append(" AND ").append(bbox.replace("geom", "request_feature.geom"));
     }
 
+    // datetime range
     if (!datetime.isEmpty()) {
       whereConditions.append(" AND ").append(datetime.replace(datetimeKey, "request_feature." + datetimeKey));
     }
 
+    // custom attribute filter
     if (!filter.isEmpty()) {
       whereConditions.append(" AND ").append(filter.replace("\"", "request_feature.\""));
     }

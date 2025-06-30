@@ -10,6 +10,7 @@ import org.apache.logging.log4j.Logger;
 import java.util.*;
 
 import static ogc.rs.apiserver.util.Constants.*;
+import static ogc.rs.common.Constants.UUID_REGEX;
 
 /**
  * Represents API usage, data usage, spatial (bbox), and feature limits extracted from a user's token.
@@ -190,13 +191,17 @@ public class Limits {
             return null;
         }
 
+        // Enforce that only one collection ID is allowed
+        if (featObject.size() != 1) {
+            LOGGER.warn("Only one collection ID is allowed in the feature limit constraint, found: {}", featObject.size());
+            throw new OgcException(400, "Bad Request", "Only one collection ID is allowed in the feature limit constraint");
+        }
+
         JsonObject validatedFeat = new JsonObject();
 
         for (String collectionId : featObject.fieldNames()) {
             // Validate that collectionId is a valid UUID
-            try {
-                UUID.fromString(collectionId);
-            } catch (IllegalArgumentException e) {
+            if (!collectionId.matches(UUID_REGEX)) {
                 LOGGER.warn("Invalid collection ID format (must be UUID): {}", collectionId);
                 throw new OgcException(400, "Bad Request", "Invalid collection ID format (must be UUID) in the token");
             }
@@ -208,19 +213,29 @@ public class Limits {
             }
 
             JsonArray validatedFeatureIds = new JsonArray();
+            Set<String> seenIds = new HashSet<>();
+
             for (int i = 0; i < featureIds.size(); i++) {
                 Object featureId = featureIds.getValue(i);
                 if (featureId != null) {
                     String featureIdStr = featureId.toString();
+
                     // Validate that featureId is numeric
                     if (!featureIdStr.matches("\\d+")) {
                         LOGGER.warn("Invalid feature ID in token, must be a numeric value for collection: {}, value: {}", collectionId, featureIdStr);
                         throw new OgcException(400, "Bad Request", "Invalid feature ID in token, must be a numeric value for collection");
                     }
+
+                    // Check and log duplicates
+                    if (!seenIds.add(featureIdStr)) {
+                        LOGGER.debug("Duplicate feature ID removed from token for collection {}: {}", collectionId, featureIdStr);
+                        continue;
+                    }
                     validatedFeatureIds.add(featureIdStr);
                 }
             }
 
+            LOGGER.debug("Number of feature IDs: {}", validatedFeatureIds.size());
             if (validatedFeatureIds.size() > 10) {
                 throw new OgcException(400, "Bad Request", "Maximum 10 feature IDs allowed per collection");
             }
@@ -244,16 +259,18 @@ public class Limits {
 
     @GenIgnore
     public Map<String, List<String>> getFeatLimitAsMap() {
-        if (featLimit == null) return null;
-        Map<String, List<String>> result = new HashMap<>();
-        for (String collectionId : featLimit.fieldNames()) {
-            JsonArray featureIds = featLimit.getJsonArray(collectionId);
-            List<String> featureIdList = new ArrayList<>();
-            for (int i = 0; i < featureIds.size(); i++) {
-                featureIdList.add(featureIds.getString(i));
-            }
-            result.put(collectionId, featureIdList);
+        if (featLimit == null || featLimit.isEmpty()) return null;
+
+        String collectionId = featLimit.fieldNames().iterator().next();
+        JsonArray featureIds = featLimit.getJsonArray(collectionId);
+
+        List<String> featureIdList = new ArrayList<>();
+        for (int i = 0; i < featureIds.size(); i++) {
+            featureIdList.add(featureIds.getString(i));
         }
+
+        Map<String, List<String>> result = new HashMap<>();
+        result.put(collectionId, featureIdList);
         return result;
     }
 

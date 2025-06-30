@@ -133,7 +133,7 @@ public class TokenLimitsEnforcementHandler implements Handler<RoutingContext> {
                         List<String> allowedFeatureIds = featLimits.get(collectionIdFromToken);
                         LOGGER.debug("The feature IDs in the token are: {}", allowedFeatureIds);
 
-                        databaseService.checkFeatureExists(collectionIdFromToken, allowedFeatureIds)
+                        databaseService.checkTokenCollectionAndFeatureIdsExist(collectionIdFromToken, allowedFeatureIds)
                                 .onSuccess(exists -> {
                                     if (!exists) {
                                         routingContext.fail(new OgcException(403, "Forbidden", "One or more features in the token do not exist"));

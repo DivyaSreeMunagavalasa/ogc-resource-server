@@ -474,7 +474,8 @@ public class DatabaseServiceImpl implements DatabaseService{
     }
 
     @Override
-    public Future<Boolean> checkFeatureExists(String collectionId, List<String> featureIds) {
+    public Future<Boolean> checkTokenCollectionAndFeatureIdsExist(String collectionId, List<String> featureIds) {
+        LOGGER.debug("Checking if the Collection and Feature Ids in the token exist in the DB...");
         Promise<Boolean> result = Promise.promise();
 
         if (featureIds == null || featureIds.isEmpty()) {
@@ -494,35 +495,32 @@ public class DatabaseServiceImpl implements DatabaseService{
                         return;
                     }
 
-                    // Step 2: Check if all feature IDs exist
-                    String placeholders = featureIds.stream()
-                            .map(id -> "$" + (featureIds.indexOf(id) + 2) + "::int")
-                            .collect(Collectors.joining(","));
+                    // Step 2: Check if all feature IDs exist using array parameter
+                    String sql = "SELECT COUNT(id) as count FROM \"" + collectionId + "\" WHERE id = ANY($2::int[])";
 
-                    String sql = "SELECT COUNT(*) as count FROM \"" + collectionId + "\" WHERE id IN (" + placeholders + ")";
+                        // Convert feature IDs from String list to integer array
+                        int[] featureIdArray = featureIds.stream()
+                                .mapToInt(Integer::parseInt)
+                                .toArray();
 
-                    // Create tuple with collection ID and feature IDs
-                    Tuple tuple = Tuple.of(UUID.fromString(collectionId));
-                    for (String featureId : featureIds) {
-                        tuple = tuple.addInteger(Integer.parseInt(featureId));
-                    }
+                        // Create tuple with collection ID and feature ID array
+                        Tuple tuple = Tuple.of(UUID.fromString(collectionId), featureIdArray);
 
-                    Tuple finalTuple = tuple;
-                    client.withConnection(conn ->
-                            conn.preparedQuery(sql)
-                                    .execute(finalTuple)
-                                    .onSuccess(rows -> {
-                                        int count = rows.iterator().next().getInteger("count");
-                                        boolean allExist = count == featureIds.size();
-                                        LOGGER.debug("Feature existence check for collection {}: {} out of {} features exist",
-                                                collectionId, count, featureIds.size());
-                                        result.complete(allExist);
-                                    })
-                                    .onFailure(throwable -> {
-                                        LOGGER.error("Error checking feature existence: {}", throwable.getMessage());
-                                        result.fail(new OgcException(500, "Internal Server Error", "Error validating feature existence"));
-                                    })
-                    );
+                        client.withConnection(conn ->
+                                conn.preparedQuery(sql)
+                                        .execute(tuple)
+                                        .onSuccess(rows -> {
+                                            int count = rows.iterator().next().getInteger("count");
+                                            boolean allExist = count == featureIds.size();
+                                            LOGGER.debug("Feature existence check for collection {}: {} out of {} features exist",
+                                                    collectionId, count, featureIds.size());
+                                            result.complete(allExist);
+                                        })
+                                        .onFailure(throwable -> {
+                                            LOGGER.error("Error checking feature existence: {}", throwable.getMessage());
+                                            result.fail(new OgcException(500, "Internal Server Error", "Error validating feature existence"));
+                                        })
+                        );
                 })
                 .onFailure(err -> {
                     LOGGER.error("Failed to check collection existence: {}", err.getMessage());
@@ -531,7 +529,6 @@ public class DatabaseServiceImpl implements DatabaseService{
 
         return result.future();
     }
-
 
     @Override
   public Future<List<JsonObject>> getStacCollections() {

@@ -11,7 +11,6 @@ import ogc.rs.apiserver.util.Limits;
 import ogc.rs.apiserver.util.StacItemSearchParams;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 
 @VertxGen
 @ProxyGen
@@ -67,7 +66,7 @@ public interface DatabaseService {
      * @param featureIds List of feature IDs to validate
      * @return Future<Boolean> true if all features exist, false otherwise
      */
-    Future<Boolean> checkFeatureExists(String collectionId, List<String> featureIds);
+    Future<Boolean> checkTokenCollectionAndFeatureIdsExist(String collectionId, List<String> featureIds);
     /**
      * Get OGC Feature Collection metadata to be used for OpenAPI spec generation.
      *

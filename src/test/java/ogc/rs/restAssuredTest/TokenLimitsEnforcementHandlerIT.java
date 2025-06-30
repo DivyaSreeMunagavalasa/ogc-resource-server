@@ -502,7 +502,27 @@ public class TokenLimitsEnforcementHandlerIT {
     }
 
     @Test
-    @Description("Failure: Test feature limit enforcement when CollectionId in the token does not exist")
+    @Description("Success: Test feature limit enforcement even when there are duplicate FeatureIds present in the token")
+    public void testFeatureLimitsEnforcementSuccessWhenDuplicateFeatureIdsExist(){
+        LOGGER.info("Testing successful feature limit enforcement with duplicate feature IDs in the token (duplicates are removed internally)");
+        // World Administrative Country Boundaries CollectionId in the token- cfdecaed-54ae-49e2-bf49-43e7d2fe0338
+        // FeatureId 5 in the token - United States of America
+        // USA Administrative State Boundaries CollectionId in the request- ba56a3d7-a0bb-49b7-a610-e231c73ebb3d
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject()
+                        .put("feat", new JsonObject()
+                                .put("cfdecaed-54ae-49e2-bf49-43e7d2fe0338", new JsonArray()
+                                        .add("5").add("5")))))
+                .build();
+        Response response = sendRequest("ba56a3d7-a0bb-49b7-a610-e231c73ebb3d", token);
+        response.then().statusCode(200);
+    }
+
+    @Test
+    @Description("Failure: Test feature limit enforcement when CollectionId in the token does not exist in DB")
     public void testFailureFeatureLimitsWhenCollectionIdNotExists(){
         LOGGER.info("Testing failure of feature limit enforcement when CollectionId in the token does not exist");
         // RANDOM_COLLECTION_ID in the token - 999024e5-0fa4-419a-9225-2604792fc504
@@ -520,7 +540,7 @@ public class TokenLimitsEnforcementHandlerIT {
     }
 
     @Test
-    @Description("Failure: Test feature limit enforcement when FeatureIds in the token do not exist")
+    @Description("Failure: Test feature limit enforcement when FeatureIds in the token do not exist in DB")
     public void testFailureFeatureLimitsWhenFeatureIdsNotExist(){
         LOGGER.info("Testing failure of feature limit enforcement when FeatureIds in the token do not exist");
         String token = new FakeTokenBuilder()
@@ -534,6 +554,27 @@ public class TokenLimitsEnforcementHandlerIT {
                 .build();
         Response response = sendRequest("ba56a3d7-a0bb-49b7-a610-e231c73ebb3d", token);
         response.then().statusCode(403).body(DESCRIPTION_KEY, is("One or more features in the token do not exist"));
+    }
+
+    @Test
+    @Description("Failure: Test feature limit enforcement when more than one CollectionId exists in the token")
+    public void testFailureFeatureLimitsWhenMoreThanOneCollectionIdExists() {
+        LOGGER.info("Testing failure of feature limit enforcement when more than one collectionId exists in the token");
+
+        // Two collections in the token
+        JsonObject featLimit = new JsonObject()
+                .put("cfdecaed-54ae-49e2-bf49-43e7d2fe0338", new JsonArray().add("5"))
+                .put("a5a6e26f-d252-446d-b7dd-4d50ea945102", new JsonArray().add("1"));
+
+        String token = new FakeTokenBuilder()
+                .withSub(UUID.randomUUID())
+                .withResourceServer()
+                .withRoleProvider()
+                .withCons(new JsonObject().put("limits", new JsonObject().put("feat", featLimit)))
+                .build();
+
+        Response response = sendRequest("ba56a3d7-a0bb-49b7-a610-e231c73ebb3d", token);
+        response.then().statusCode(400).body(DESCRIPTION_KEY, is("Only one collection ID is allowed in the feature limit constraint"));
     }
 
     @Test
