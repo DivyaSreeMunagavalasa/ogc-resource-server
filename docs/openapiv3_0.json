@@ -868,6 +868,285 @@
         }
       }
     },
+    "/health": {
+      "get": {
+        "tags": [
+          "Health Check"
+        ],
+        "summary": "Overall health check",
+        "description": "Returns the overall health status of the application by performing both liveness and readiness checks. The service is considered healthy only if both checks pass.",
+        "operationId": "healthCheck",
+        "responses": {
+          "200": {
+            "description": "Application is healthy - both liveness and readiness checks passed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/healthCheckResponse"
+                },
+                "example": {
+                  "status": "UP",
+                  "checks": [
+                    {
+                      "name": "server-alive",
+                      "status": "UP",
+                      "data": {
+                        "timestamp": "2025-07-30T10:30:00Z",
+                        "uptime": 1234567890
+                      }
+                    },
+                    {
+                      "name": "database-connection",
+                      "status": "UP",
+                      "data": {
+                        "host": "localhost",
+                        "port": 5432,
+                        "database": "ogc_db",
+                        "connectionPool": "active"
+                      }
+                    },
+                    {
+                      "name": "flyway-migration-status",
+                      "status": "UP",
+                      "data": {
+                        "latestFileVersion": "1.2.3",
+                        "databaseVersion": "1.2.3",
+                        "migrationSuccess": true,
+                        "upToDate": true
+                      }
+                    },
+                    {
+                      "name": "catalogue-service",
+                      "status": "UP",
+                      "data": {
+                        "host": "catalogue.example.com",
+                        "port": 443,
+                        "endpoint": "/iudx/cat/v1/item",
+                        "responseTime": "150ms",
+                        "statusCode": 200
+                      }
+                    },
+                    {
+                      "name": "aaa-service",
+                      "status": "UP",
+                      "data": {
+                        "host": "auth.example.com",
+                        "jwtAuthInitialized": true,
+                        "note": "JWT Authentication is properly initialized and ready"
+                      }
+                    },
+                    {
+                      "name": "s3-service",
+                      "status": "UP",
+                      "data": {
+                        "bucketsCount": 3,
+                        "responseTime": "100ms",
+                        "endpoint": "https://s3.example.com"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Application is unhealthy - one or more health checks failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/healthCheckResponse"
+                },
+                "example": {
+                  "status": "DOWN",
+                  "checks": [
+                    {
+                      "name": "server-alive",
+                      "status": "UP",
+                      "data": {
+                        "timestamp": "2025-07-30T10:30:00Z",
+                        "uptime": 1234567890
+                      }
+                    },
+                    {
+                      "name": "database-connection",
+                      "status": "DOWN",
+                      "data": {
+                        "error": "Connection refused"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/live": {
+      "get": {
+        "tags": [
+          "Health Check"
+        ],
+        "summary": "Liveness check",
+        "description": "Returns the liveness status of the application. This endpoint indicates whether the application is running and can handle requests.",
+        "operationId": "livenessCheck",
+        "responses": {
+          "200": {
+            "description": "Application is alive and running.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/healthCheckResponse"
+                },
+                "example": {
+                  "status": "UP",
+                  "checks": [
+                    {
+                      "name": "server-alive",
+                      "status": "UP",
+                      "data": {
+                        "timestamp": "2025-07-30T10:30:00Z",
+                        "uptime": 1234567890
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Application is not alive or not responding.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/healthCheckResponse"
+                },
+                "example": {
+                  "status": "DOWN",
+                  "checks": [
+                    {
+                      "name": "liveness-check-error",
+                      "status": "DOWN",
+                      "data": {
+                        "error": "Application not responding"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "tags": [
+          "Health Check"
+        ],
+        "summary": "Readiness check",
+        "description": "Returns the readiness status of the application. This endpoint indicates whether the application is ready to serve requests by checking dependencies like database, external services, and migrations.",
+        "operationId": "readinessCheck",
+        "responses": {
+          "200": {
+            "description": "Application is ready to serve requests - all dependencies are healthy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/healthCheckResponse"
+                },
+                "example": {
+                  "status": "UP",
+                  "checks": [
+                    {
+                      "name": "database-connection",
+                      "status": "UP",
+                      "data": {
+                        "host": "localhost",
+                        "port": 5432,
+                        "database": "ogc_db",
+                        "connectionPool": "active"
+                      }
+                    },
+                    {
+                      "name": "flyway-migration-status",
+                      "status": "UP",
+                      "data": {
+                        "latestFileVersion": "1.2.3",
+                        "databaseVersion": "1.2.3",
+                        "migrationSuccess": true,
+                        "upToDate": true
+                      }
+                    },
+                    {
+                      "name": "catalogue-service",
+                      "status": "UP",
+                      "data": {
+                        "host": "catalogue.example.com",
+                        "port": 443,
+                        "endpoint": "/iudx/cat/v1/item",
+                        "responseTime": "150ms",
+                        "statusCode": 200
+                      }
+                    },
+                    {
+                      "name": "aaa-service",
+                      "status": "UP",
+                      "data": {
+                        "host": "auth.example.com",
+                        "jwtAuthInitialized": true,
+                        "note": "JWT Authentication is properly initialized and ready"
+                      }
+                    },
+                    {
+                      "name": "s3-service",
+                      "status": "UP",
+                      "data": {
+                        "bucketsCount": 3,
+                        "responseTime": "100ms",
+                        "endpoint": "https://s3.example.com"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Application is not ready to serve requests - one or more dependencies are unhealthy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/healthCheckResponse"
+                },
+                "example": {
+                  "status": "DOWN",
+                  "checks": [
+                    {
+                      "name": "database-connection",
+                      "status": "DOWN",
+                      "data": {
+                        "error": "Connection timeout"
+                      }
+                    },
+                    {
+                      "name": "flyway-migration-status",
+                      "status": "DOWN",
+                      "data": {
+                        "latestFileVersion": "1.2.4",
+                        "databaseVersion": "1.2.3",
+                        "migrationSuccess": true,
+                        "upToDate": false
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/collections/{collectionId}/schema": {
       "get": {
         "tags": [
@@ -2939,6 +3218,58 @@
           "minTileCol",
           "maxTileCol"
         ]
+      },
+      "healthCheckResponse": {
+        "type": "object",
+        "required": [
+          "status",
+          "checks"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["UP", "DOWN"],
+            "description": "Overall health status",
+            "example": "UP"
+          },
+          "checks": {
+            "type": "array",
+            "description": "Array of individual health check results",
+            "items": {
+              "$ref": "#/components/schemas/healthCheck"
+            }
+          }
+        }
+      },
+      "healthCheck": {
+        "type": "object",
+        "required": [
+          "name",
+          "status"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name of the health check",
+            "example": "database-connection"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["UP", "DOWN"],
+            "description": "Status of this specific health check",
+            "example": "UP"
+          },
+          "data": {
+            "type": "object",
+            "description": "Additional data about the health check result",
+            "additionalProperties": true,
+            "example": {
+              "host": "localhost",
+              "port": 5432,
+              "responseTime": "50ms"
+            }
+          }
+        }
       },
   "process": {
     "allOf": [

@@ -72,3 +72,6 @@ build/
 secrets/configs/*
 secrets/*
 
+### flyway ###
+flyway.conf
+

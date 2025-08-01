@@ -7,6 +7,7 @@
   "commonConfig" : {
     "ogcBasePath" : "/",
     "dxCatalogueBasePath": "/iudx/cat/v1",
+    "catRequestInstanceUri":"/iudx/cat/v1/internal/ui/instance",
     "dxAuthBasePath": "/auth/v1",
     "hostName": "https://server.url.com",
     "catalogId": "stac"

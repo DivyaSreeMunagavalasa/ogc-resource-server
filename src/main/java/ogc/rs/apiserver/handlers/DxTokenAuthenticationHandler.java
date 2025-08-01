@@ -28,7 +28,11 @@ public class DxTokenAuthenticationHandler implements AuthenticationHandler {
   private WebClient webClient;
   private static JWTAuth jwtAuth;
 
-  static WebClient createWebClient(Vertx vertx, JsonObject config) {
+    // Add static fields to track initialization state
+    private static boolean jwtAuthInitialized = false;
+    private static String initializationError = null;
+
+    static WebClient createWebClient(Vertx vertx, JsonObject config) {
     return createWebClient(vertx, config, false);
   }
 
@@ -68,11 +72,20 @@ public class DxTokenAuthenticationHandler implements AuthenticationHandler {
                   .setAudience(Collections.singletonList(config.getString("audience")));
               jwtAuthOptions.getJWTOptions().setIssuer(config.getString("issuer"));
               jwtAuth = JWTAuth.create(vertx, jwtAuthOptions);
+
+              // Mark as successfully initialized
+                jwtAuthInitialized = true;
+                initializationError = null;
+                LOGGER.info("JWT Authentication successfully initialized");
             })
         .onFailure(
             handler -> {
               LOGGER.error("failed to get JWT public key from auth server");
               LOGGER.error("Authentication verticle deployment failed.");
+                // Mark as failed initialization
+                jwtAuthInitialized = false;
+                initializationError = handler.getMessage();
+                jwtAuth = null;
             });
   }
 
@@ -95,14 +108,28 @@ public class DxTokenAuthenticationHandler implements AuthenticationHandler {
                   JsonObject json = handler.result().bodyAsJsonObject();
                   promise.complete(json.getString("cert"));
                 } else {
-                  promise.fail("fail to get JWT public key");
+                  promise.fail("failed to get JWT public key: " + handler.cause().getMessage());
                 }
               });
     }
     return promise.future();
   }
 
-  @Override
+    /**
+     * Static method to check if JWT authentication is properly initialized
+     * This can be called from HealthCheckService
+     */
+    public static boolean isJwtAuthInitialized() {
+        return jwtAuthInitialized && jwtAuth != null;
+    }
+    /**
+     * Get the initialization error if any
+     */
+    public static String getInitializationError() {
+        return initializationError;
+    }
+
+    @Override
   public void handle(RoutingContext routingContext) {
     
     if(System.getProperty("disable.auth") != null) {
@@ -133,7 +160,14 @@ public class DxTokenAuthenticationHandler implements AuthenticationHandler {
     
     String token = parts[1];
 
-      jwtAuth.authenticate(
+    // Check if jwtAuth is null (initialization failed)
+        if (jwtAuth == null) {
+            LOGGER.error("JWT Authentication not initialized - cannot authenticate token");
+            routingContext.fail(new OgcException(503, "Authentication service unavailable", "JWT Authentication not properly initialized"));
+            return;
+        }
+
+        jwtAuth.authenticate(
               new JsonObject().put("token", token),
               res -> {
                   if (res.succeeded()) {

@@ -25,6 +25,7 @@ import ogc.rs.common.S3BucketReadAccess;
 import ogc.rs.common.S3Config;
 import ogc.rs.common.S3ConfigsHolder;
 import ogc.rs.database.DatabaseService;
+import ogc.rs.health.HealthCheckService;
 import ogc.rs.jobs.JobsService;
 import ogc.rs.metering.MeteringService;
 import ogc.rs.processes.ProcessesRunnerService;
@@ -98,6 +99,7 @@ public class ApiServerVerticle extends AbstractVerticle {
   private HttpClient httpClient;
   private ProcessesRunnerService processService;
   private JobsService jobsService;
+  private HealthCheckService healthCheckService;
 
   String tileMatrixSetUrl = "https://raw.githubusercontent.com/opengeospatial/2D-Tile-Matrix-Set/master/registry" +
       "/json/$.json";
@@ -136,6 +138,7 @@ public class ApiServerVerticle extends AbstractVerticle {
     processService = ProcessesRunnerService.createProxy(vertx,PROCESSING_SERVICE_ADDRESS);
     dbService = DatabaseService.createProxy(vertx, DATABASE_SERVICE_ADDRESS);
     jobsService = JobsService.createProxy(vertx,JOBS_SERVICE_ADDRESS);
+    this.healthCheckService = new HealthCheckService(vertx, config());
 
     // TODO: ssl configuration
     HttpServerOptions serverOptions = new HttpServerOptions();
@@ -3327,5 +3330,106 @@ public class ApiServerVerticle extends AbstractVerticle {
           }
           routingContext.next();
         });
+  }
+  /**
+   * Handler for overall health check endpoint (/health)
+   * Returns AND operation of liveness and readiness checks
+   */
+  public void handleHealthCheck(RoutingContext routingContext) {
+    healthCheckService.performHealthCheck()
+            .onSuccess(result -> {
+              HttpServerResponse response = routingContext.response();
+              response.putHeader("content-type", "application/json");
+
+              String status = result.getString("status");
+              int statusCode = "UP".equals(status) ? 200 : 503;
+
+              response.setStatusCode(statusCode);
+              response.end(result.encodePrettily());
+            })
+            .onFailure(throwable -> {
+              HttpServerResponse response = routingContext.response();
+              response.putHeader("content-type", "application/json");
+              response.setStatusCode(503);
+
+              JsonObject errorResponse = new JsonObject()
+                      .put("status", "DOWN")
+                      .put("checks", new JsonArray()
+                              .add(new JsonObject()
+                                      .put("name", "health-check-error")
+                                      .put("status", "DOWN")
+                                      .put("data", new JsonObject()
+                                              .put("error", throwable.getMessage()))));
+
+              response.end(errorResponse.encodePrettily());
+            });
+  }
+
+  /**
+   * Handler for liveness check endpoint (/health/live)
+   * Determines if the application is running
+   */
+  public void handleLivenessCheck(RoutingContext routingContext) {
+    healthCheckService.performLivenessCheck()
+            .onSuccess(result -> {
+              HttpServerResponse response = routingContext.response();
+              response.putHeader("content-type", "application/json");
+
+              String status = result.getString("status");
+              int statusCode = "UP".equals(status) ? 200 : 503;
+
+              response.setStatusCode(statusCode);
+              response.end(result.encodePrettily());
+            })
+            .onFailure(throwable -> {
+              HttpServerResponse response = routingContext.response();
+              response.putHeader("content-type", "application/json");
+              response.setStatusCode(503);
+
+              JsonObject errorResponse = new JsonObject()
+                      .put("status", "DOWN")
+                      .put("checks", new JsonArray()
+                              .add(new JsonObject()
+                                      .put("name", "liveness-check-error")
+                                      .put("status", "DOWN")
+                                      .put("data", new JsonObject()
+                                              .put("error", throwable.getMessage()))));
+
+              response.end(errorResponse.encodePrettily());
+            });
+  }
+
+  /**
+   * Handler for readiness check endpoint (/health/ready)
+   * Determines if the application is ready to serve requests
+   */
+  public void handleReadinessCheck(RoutingContext routingContext) {
+    healthCheckService.performReadinessCheck()
+            .onSuccess(result -> {
+              HttpServerResponse response = routingContext.response();
+              response.putHeader("content-type", "application/json");
+
+              String status = result.getString("status");
+              int statusCode = "UP".equals(status) ? 200 : 503;
+
+              response.setStatusCode(statusCode);
+              response.end(result.encodePrettily());
+            })
+            .onFailure(throwable -> {
+              HttpServerResponse response = routingContext.response();
+              response.putHeader("content-type", "application/json");
+              response.setStatusCode(503);
+
+              JsonObject errorResponse = new JsonObject()
+                      .put("status", "DOWN")
+                      .put("checks", new JsonArray()
+                              .add(new JsonObject()
+                                      .put("name", "readiness-check-error")
+                                      .put("status", "DOWN")
+                                      .put("data", new JsonObject()
+                                              .put("error", throwable.getMessage()))));
+
+              response.end(errorResponse.encodePrettily());
+            });
   }
 }

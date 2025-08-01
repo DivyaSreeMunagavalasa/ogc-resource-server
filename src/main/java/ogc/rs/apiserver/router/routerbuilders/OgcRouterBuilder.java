@@ -74,6 +74,12 @@ public class OgcRouterBuilder extends EntityRouterBuilder {
         .handler(apiServerVerticle::putCommonResponseHeaders)
         .handler(apiServerVerticle::buildResponse).failureHandler(failureHandler);
 
+    // Health Check Routes
+    routerBuilder.operation(HEALTH_CHECK_API).handler(apiServerVerticle::handleHealthCheck);
+    routerBuilder.operation(LIVENESS_HEALTH_CHECK_API).handler(apiServerVerticle::handleLivenessCheck);
+    routerBuilder.operation(READINESS_HEALTH_CHECK_API).handler(apiServerVerticle::handleReadinessCheck);
+
+
     /**
      * For all implementers of GisEntityInterface, add the OGC routes to the RouterBuilder.
      */
