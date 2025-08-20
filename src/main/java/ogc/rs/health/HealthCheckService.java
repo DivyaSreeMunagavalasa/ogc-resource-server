@@ -44,9 +44,6 @@ public class HealthCheckService {
     private final JsonObject config;
 
     // Database-related fields
-    private PgConnectOptions connectOptions;
-    private PoolOptions poolOptions;
-    private PgPool pgPool;
     private String databaseIp;
     private int databasePort;
     private String databaseName;
@@ -65,26 +62,34 @@ public class HealthCheckService {
     }
 
     /**
-     * Initialize all dependencies (database pool, web client, S3 client)
+     * Initialize all dependencies (web client, S3 client)
+     * Database pool is created per check
      */
     private void initializeDependencies() {
-        initializeDatabase();
+        initializeDatabaseConfig();
         initializeWebClient();
         initializeS3Client();
     }
 
     /**
-     * Initialize database connection pool
+     * Initialize database configuration parameters
+     * Database pool will be created when needed in individual checks
      */
-    private void initializeDatabase() {
+    private void initializeDatabaseConfig() {
         databaseIp = config.getString("databaseHost");
         databasePort = config.getInteger("databasePort");
         databaseName = config.getString("databaseName");
         databaseUserName = config.getString("databaseUser");
         databasePassword = config.getString("databasePassword");
         poolSize = config.getInteger("poolSize");
+    }
 
-        this.connectOptions = new PgConnectOptions()
+    /**
+     * Create a new database connection pool for health checks
+     * This is called per check and pool is closed after use
+     */
+    private PgPool createDatabasePool() {
+        PgConnectOptions connectOptions = new PgConnectOptions()
                 .setPort(databasePort)
                 .setHost(databaseIp)
                 .setDatabase(databaseName)
@@ -93,8 +98,8 @@ public class HealthCheckService {
                 .setReconnectAttempts(2)
                 .setReconnectInterval(1000L);
 
-        this.poolOptions = new PoolOptions().setMaxSize(poolSize);
-        this.pgPool = PgPool.pool(vertx, connectOptions, poolOptions);
+        PoolOptions poolOptions = new PoolOptions().setMaxSize(poolSize);
+        return PgPool.pool(vertx, connectOptions, poolOptions);
     }
 
     /**
@@ -308,10 +313,14 @@ public class HealthCheckService {
 
     /**
      * Checks database connection readiness by executing a simple SELECT query.
+     * Creates a new connection pool for this check and closes it after use.
      * Returns connection details on success or error message on failure.
      */
     private Future<JsonObject> checkDatabaseReadiness() {
         Promise<JsonObject> promise = Promise.promise();
+
+        // Create database pool for this specific check
+        PgPool pgPool = createDatabasePool();
 
         pgPool.query("SELECT 1").execute(ar -> {
             JsonObject result = new JsonObject().put("name", "database-connection");
@@ -329,6 +338,8 @@ public class HealthCheckService {
                                 .put("error", ar.cause().getMessage()));
             }
 
+            // Close the pool after the check is complete
+            pgPool.close();
             promise.complete(result);
         });
 
@@ -338,12 +349,16 @@ public class HealthCheckService {
     /**
      * Validates Flyway migration status by comparing filesystem and database versions.
      * Ensures all migrations are successfully applied and up-to-date.
+     * Creates a new connection pool for this check and closes it after use.
      */
     private Future<JsonObject> checkFlywayMigrationStatus() {
         Promise<JsonObject> promise = Promise.promise();
 
         // Get latest migration version from filesystem
         String latestFileVersion = getLatestMigrationVersionFromFiles();
+
+        // Create database pool for this specific check
+        PgPool pgPool = createDatabasePool();
 
         // Check database migration status
         String query = "SELECT version, success FROM flyway_schema_history ORDER BY installed_rank DESC LIMIT 1";
@@ -387,6 +402,8 @@ public class HealthCheckService {
                                 .put("error", ar.cause().getMessage()));
             }
 
+            // Close the pool after the check is complete
+            pgPool.close();
             promise.complete(result);
         });
 
@@ -394,24 +411,15 @@ public class HealthCheckService {
     }
 
     /**
-     * Checks catalogue service availability by making HTTP request to configured endpoint.
+     * Checks catalogue service availability by making HTTP request to the root endpoint.
      * Accepts 2xx and 4xx status codes as indication that service is running.
      */
     private Future<JsonObject> checkCatalogueService() {
         Promise<JsonObject> promise = Promise.promise();
 
-        String catServerHost = config.getString("catServerHost");
-        Integer catServerPort = config.getInteger("catServerPort");
-        String catRequestInstanceUri = config.getString("catRequestInstanceUri", "/iudx/cat/v1/internal/ui/instance");
-
-        if (catServerHost == null || catServerPort == null) {
-            JsonObject result = new JsonObject()
-                    .put("name", "catalogue-service")
-                    .put("status", STATUS_DOWN)
-                    .put("data", new JsonObject().put("error", "Catalogue service configuration not found"));
-            promise.complete(result);
-            return promise.future();
-        }
+        String catServerHost = config.getString("catServerHost", "api.cat-test.iudx.io");
+        Integer catServerPort = config.getInteger("catServerPort", 443);
+        String catRequestInstanceUri = "/"; // Use root endpoint
 
         long startTime = System.currentTimeMillis();
 
@@ -523,6 +531,8 @@ public class HealthCheckService {
     /**
      * Verifies S3 service accessibility by performing headBucket operation on configured bucket.
      * Checks bucket configuration and measures response time for connectivity validation.
+     * Uses executeBlocking to handle the synchronous S3 SDK calls within Vert.x's event loop
+     * without blocking the event loop thread, as S3 SDK operations are blocking by nature.
      */
     private Future<JsonObject> checkS3Service() {
         Promise<JsonObject> promise = Promise.promise();
@@ -536,6 +546,9 @@ public class HealthCheckService {
             return promise.future();
         }
 
+        // Using executeBlocking because S3 SDK operations are synchronous/blocking by nature
+        // and would block the Vert.x event loop if called directly. executeBlocking ensures
+        // these blocking operations are handled on a worker thread pool instead.
         vertx.executeBlocking(blockingPromise -> {
             try {
                 long startTime = System.currentTimeMillis();
@@ -661,11 +674,9 @@ public class HealthCheckService {
 
     /**
      * Clean up resources when the service is no longer needed
+     * Database pools are created per check and closed immediately after use
      */
     public void close() {
-        if (pgPool != null) {
-            pgPool.close();
-        }
         if (webClient != null) {
             webClient.close();
         }

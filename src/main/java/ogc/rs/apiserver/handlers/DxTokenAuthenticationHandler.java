@@ -80,12 +80,24 @@ public class DxTokenAuthenticationHandler implements AuthenticationHandler {
             })
         .onFailure(
             handler -> {
-              LOGGER.error("failed to get JWT public key from auth server");
-              LOGGER.error("Authentication verticle deployment failed.");
                 // Mark as failed initialization
                 jwtAuthInitialized = false;
                 initializationError = handler.getMessage();
                 jwtAuth = null;
+
+                // Log FATAL error and throw RuntimeException
+                LOGGER.fatal("Failed to initialize JWT Authentication: {}", handler.getMessage());
+
+                // Attempt to close Vertx instance to stop the application
+                try {
+                    vertx.close();
+                    LOGGER.fatal("Vertx instance closed due to JWT authentication failure");
+                } catch (Exception e) {
+                    LOGGER.fatal("Failed to close Vertx instance after JWT initialization failure", e);
+                }
+
+                // Throw RuntimeException to indicate critical failure
+                throw new RuntimeException("JWT Authentication initialization failed: " + handler.getMessage(), handler);
             });
   }
 
@@ -131,12 +143,12 @@ public class DxTokenAuthenticationHandler implements AuthenticationHandler {
 
     @Override
   public void handle(RoutingContext routingContext) {
-    
+
     if(System.getProperty("disable.auth") != null) {
       routingContext.next();
       return;
     }
-    
+
     String authZHeader = routingContext.request().headers().get(HEADER_AUTHORIZATION);
     String path = routingContext.normalizedPath();
     boolean isStacItemEndpoint = path.matches(STAC_ASSETS_BY_ID_REGEX);
@@ -157,7 +169,7 @@ public class DxTokenAuthenticationHandler implements AuthenticationHandler {
           new OgcException(401, "Invalid Authorization header", "Invalid Authorization header"));
       return;
     }
-    
+
     String token = parts[1];
 
     // Check if jwtAuth is null (initialization failed)
