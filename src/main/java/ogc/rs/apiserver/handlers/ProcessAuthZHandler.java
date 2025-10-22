@@ -67,8 +67,15 @@ public class ProcessAuthZHandler implements Handler<RoutingContext> {
       routingContext.data().put("authInfo", results);
       routingContext.next();
     }
+    else if (user.getRole() == AuthInfo.RoleEnum.admin) {
+        JsonObject results = new JsonObject();
+        results.put("userId", user.getUserId());
+        results.put("role", user.getRole());
+        routingContext.data().put("authInfo", results);
+        routingContext.next();
+    }
     else {
-      LOGGER.debug("Not a provider or a provider delegate token. It is of role {} ", user.getRole());
+      LOGGER.debug("Not a provider or a provider delegate token or an admin role. It is of role {} ", user.getRole());
       routingContext.fail(
           new OgcException(
               401, "Not Authorized", "User is not authorised. Please contact DX AAA "));

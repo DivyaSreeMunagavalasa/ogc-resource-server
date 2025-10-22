@@ -19,6 +19,7 @@ import ogc.rs.processes.echo.EchoProcess;
 import ogc.rs.processes.featureAttributesExtraction.FeatureAttributesExtractionProcess;
 import ogc.rs.processes.s3MultiPartUploadForStacOnboarding.S3CompleteMultiPartUploadProcess;
 import ogc.rs.processes.s3MultiPartUploadForStacOnboarding.S3InitiateMultiPartUploadProcess;
+import ogc.rs.processes.auditLogsIngestion.AuditLogsIngestionProcess;
 import ogc.rs.processes.tilesMetaDataOnboarding.TilesMetaDataOnboardingProcess;
 import ogc.rs.processes.s3PreSignedURLGeneration.S3PreSignedURLGenerationProcess;
 import ogc.rs.processes.tilesOnboardingFromExistingFeature.TilesOnboardingFromExistingFeatureProcess;
@@ -160,6 +161,9 @@ public class ProcessesRunnerImpl implements ProcessesRunnerService {
         case "S3CompleteMultipartUpload":
           processService = new S3CompleteMultiPartUploadProcess(pgPool, processSpecificS3Conf);
           break;
+          case "AuditLogsIngestion":
+              processService = new AuditLogsIngestionProcess(pgPool);
+              break;
         case "TilesMetaDataOnboarding":
           processService = new TilesMetaDataOnboardingProcess(pgPool, webClient, config, processSpecificS3Conf, vertx);
           break;
